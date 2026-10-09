@@ -1,0 +1,232 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nova AI Chat</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, Arial, sans-serif;
+      background: #101114;
+      color: #f5f5f7;
+    }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app { display: flex; height: 100dvh; }
+    .sidebar {
+      width: 255px; padding: 18px;
+      background: #17181d; border-right: 1px solid #292a31;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .brand { font-size: 21px; font-weight: 750; padding: 8px 4px; }
+    .brand span { color: #a78bfa; }
+    .new-chat, .history-item, .menu-button {
+      border: 1px solid #34353e; color: #eee;
+      background: #22232a; border-radius: 12px; padding: 12px;
+      text-align: left;
+    }
+    .new-chat:hover, .history-item:hover { background: #2d2e37; }
+    .section-label { color: #8e909b; font-size: 12px; margin-top: 8px; }
+    .history-item { border: 0; background: transparent; }
+    .account { margin-top: auto; color: #b4b5c0; font-size: 13px; }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    header {
+      height: 64px; padding: 0 22px; display: flex;
+      align-items: center; justify-content: space-between;
+      border-bottom: 1px solid #292a31;
+    }
+    .model { color: #b4b5c0; font-size: 13px; }
+    .menu-button { display: none; }
+    .messages {
+      flex: 1; overflow-y: auto; padding: 30px 18px;
+      display: flex; flex-direction: column; gap: 22px;
+    }
+    .welcome { margin: auto; text-align: center; max-width: 560px; }
+    .welcome .orb {
+      margin: 0 auto 20px; width: 60px; height: 60px;
+      display: grid; place-items: center; border-radius: 20px;
+      background: linear-gradient(135deg, #8b5cf6, #4f46e5);
+      font-size: 28px;
+    }
+    h1 { font-size: clamp(26px, 5vw, 38px); margin: 0 0 12px; }
+    .muted { color: #a1a2ae; line-height: 1.6; }
+    .suggestions {
+      display: grid; grid-template-columns: repeat(2, 1fr);
+      gap: 10px; margin-top: 28px;
+    }
+    .suggestions button {
+      text-align: left; color: #ddd; background: #191a20;
+      border: 1px solid #30313a; border-radius: 13px;
+      padding: 14px; line-height: 1.45;
+    }
+    .suggestions button:hover { border-color: #8b5cf6; }
+    .message { max-width: 760px; width: 100%; margin: 0 auto; line-height: 1.65; }
+    .message.user { align-self: flex-end; width: fit-content; max-width: min(760px, 90%); }
+    .bubble { padding: 13px 16px; border-radius: 16px; white-space: pre-wrap; }
+    .user .bubble { background: #343044; }
+    .assistant .bubble { background: #191a20; border: 1px solid #30313a; }
+    .composer-wrap { padding: 12px 18px 20px; }
+    .notice { text-align: center; font-size: 12px; color: #888a96; margin: 0 0 10px; }
+    .composer {
+      max-width: 820px; margin: auto; display: flex; gap: 10px;
+      padding: 10px; background: #1b1c22;
+      border: 1px solid #383943; border-radius: 18px;
+    }
+    textarea {
+      flex: 1; min-width: 0; resize: none; max-height: 150px;
+      border: 0; outline: 0; color: white; background: transparent;
+      padding: 10px; line-height: 1.5;
+    }
+    .send {
+      width: 44px; height: 44px; align-self: flex-end;
+      border: 0; border-radius: 13px; background: #8b5cf6; color: white;
+      font-size: 20px;
+    }
+    .send:hover { background: #7c3aed; }
+    .send:disabled { opacity: .5; cursor: not-allowed; }
+    @media (max-width: 700px) {
+      .sidebar { display: none; position: fixed; inset: 0 auto 0 0; z-index: 5; box-shadow: 20px 0 80px #0009; }
+      .sidebar.open { display: flex; }
+      .menu-button { display: block; }
+      header { padding: 0 12px; gap: 10px; }
+      .messages { padding: 22px 12px; }
+      .suggestions { grid-template-columns: 1fr; }
+      .composer-wrap { padding: 10px 10px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">✦ Nova <span>AI</span></div>
+      <button class="new-chat" id="newChat">＋ New chat</button>
+      <div class="section-label">RECENT CHATS</div>
+      <div id="history"></div>
+      <div class="account">AI Chat prototype<br><span class="muted">Authentication not connected</span></div>
+    </aside>
+
+    <main class="main">
+      <header>
+        <button class="menu-button" id="menuButton" aria-label="Open sidebar">☰</button>
+        <strong>AI Chat</strong>
+        <span class="model">Backend not connected</span>
+      </header>
+
+      <section class="messages" id="messages" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <div class="orb">✦</div>
+          <h1>What can we explore?</h1>
+          <p class="muted">A fresh space for ideas, learning, writing and problem-solving.</p>
+          <div class="suggestions">
+            <button data-prompt="Explain artificial intelligence in simple terms.">✧ Learn something new<br><span class="muted">Explain a complex topic</span></button>
+            <button data-prompt="Help me brainstorm a creative project idea.">✧ Brainstorm ideas<br><span class="muted">Turn an idea into a plan</span></button>
+            <button data-prompt="Help me improve this piece of writing.">✧ Improve my writing<br><span class="muted">Make a draft clearer</span></button>
+            <button data-prompt="Help me understand a programming problem.">✧ Solve a coding problem<br><span class="muted">Work through it step by step</span></button>
+          </div>
+        </div>
+      </section>
+
+      <div class="composer-wrap">
+        <p class="notice" id="status">Prototype mode — messages are not sent to an AI service yet.</p>
+        <form class="composer" id="chatForm">
+          <textarea id="prompt" rows="1" maxlength="8000"
+            placeholder="Message Nova AI..." aria-label="Your message"></textarea>
+          <button class="send" id="sendButton" type="submit" aria-label="Send message">↑</button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const messages = document.getElementById("messages");
+    const welcome = document.getElementById("welcome");
+    const promptBox = document.getElementById("prompt");
+    const status = document.getElementById("status");
+    const historyBox = document.getElementById("history");
+    const sidebar = document.getElementById("sidebar");
+    let chats = [];
+    let activeChat = [];
+
+    function renderMessage(role, text) {
+      const wrapper = document.createElement("div");
+      wrapper.className = `message ${role}`;
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = text;
+      wrapper.appendChild(bubble);
+      messages.appendChild(wrapper);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function renderHistory() {
+      historyBox.replaceChildren();
+      chats.slice().reverse().forEach((chat, index) => {
+        const button = document.createElement("button");
+        button.className = "history-item";
+        button.textContent = chat[0]?.text.slice(0, 28) || `Chat ${index + 1}`;
+        button.onclick = () => {
+          activeChat = chat;
+          showChat();
+          sidebar.classList.remove("open");
+        };
+        historyBox.appendChild(button);
+      });
+    }
+
+    function showChat() {
+      messages.replaceChildren();
+      if (!activeChat.length) {
+        messages.appendChild(welcome);
+        return;
+      }
+      activeChat.forEach(item => renderMessage(item.role, item.text));
+    }
+
+    function newChat() {
+      if (activeChat.length) chats.push(activeChat);
+      activeChat = [];
+      messages.replaceChildren();
+      messages.appendChild(welcome);
+      renderHistory();
+      promptBox.focus();
+    }
+
+    document.getElementById("newChat").addEventListener("click", newChat);
+    document.getElementById("menuButton").addEventListener("click", () => sidebar.classList.toggle("open"));
+
+    document.querySelectorAll("[data-prompt]").forEach(button => {
+      button.addEventListener("click", () => {
+        promptBox.value = button.dataset.prompt;
+        promptBox.focus();
+      });
+    });
+
+    document.getElementById("chatForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const text = promptBox.value.trim();
+      if (!text) return;
+
+      if (activeChat.length === 0) messages.replaceChildren();
+      activeChat.push({ role: "user", text });
+      renderMessage("user", text);
+      promptBox.value = "";
+      promptBox.style.height = "auto";
+
+      // No fake AI reply: backend integration comes in the next step.
+      const explanation = "The chat interface is ready, but the AI backend is not connected yet. Your message has not been sent to Gemini.";
+      activeChat.push({ role: "assistant", text: explanation });
+      renderMessage("assistant", explanation);
+      status.textContent = "Prototype mode — no external AI request was made.";
+      renderHistory();
+    });
+
+    promptBox.addEventListener("input", () => {
+      promptBox.style.height = "auto";
+      promptBox.style.height = Math.min(promptBox.scrollHeight, 150) + "px";
+    });
+  </script>
+</body>
+</html>
