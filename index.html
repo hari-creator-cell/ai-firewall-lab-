@@ -1,516 +1,795 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nova AI Chat</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b0b12">
+  <title>Nova AI Chat</title>
 
-<style>
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,Arial;background:#101114;color:#f5f5f7}
-button,input,textarea{font:inherit}
-button{cursor:pointer}
-button:disabled{opacity:.5;cursor:not-allowed}
-.app{display:none;height:100dvh}
-.sidebar{width:255px;padding:18px;background:#17181d;border-right:1px solid #292a31;display:flex;flex-direction:column;gap:16px}
-.brand{font-size:22px;font-weight:750;padding:8px 4px}
-.brand span{color:#a78bfa}
-.new-chat,.history-item{border:1px solid #34353e;color:#eee;background:#22232a;border-radius:12px;padding:12px;text-align:left}
-.section-label{color:#8e909b;font-size:12px}
-#history{display:flex;flex-direction:column;gap:6px}
-.history-item{border:0;background:transparent;overflow:hidden;text-overflow:ellipsis}
-.account{margin-top:auto;color:#b4b5c0;font-size:13px}
-.main{flex:1;min-width:0;display:flex;flex-direction:column}
-header{height:64px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #292a31}
-.model{color:#b4b5c0;font-size:13px}
-.menu-button{display:none}
-.messages{flex:1;overflow-y:auto;padding:30px 18px;display:flex;flex-direction:column;gap:22px}
-.welcome{margin:auto;text-align:center;max-width:560px}
-.orb{margin:0 auto 20px;width:60px;height:60px;display:grid;place-items:center;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#4f46e5);font-size:28px}
-h1{font-size:clamp(26px,5vw,38px);margin:0 0 12px}
-.muted{color:#a1a2ae;line-height:1.6}
-.suggestions{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:28px}
-.suggestions button{text-align:left;color:#ddd;background:#191a20;border:1px solid #30313a;border-radius:13px;padding:14px;line-height:1.5}
-.suggestions button:hover{border-color:#8b5cf6}
-.message{max-width:760px;width:100%;margin:0 auto;line-height:1.65;overflow-wrap:anywhere}
-.message.user{align-self:flex-end;width:fit-content;max-width:min(760px,90%)}
-.bubble{padding:13px 16px;border-radius:16px;white-space:pre-wrap}
-.user .bubble{background:#343044}
-.assistant .bubble{background:#191a20;border:1px solid #30313a}
-.composer-wrap{padding:12px 18px 20px}
-.notice{text-align:center;font-size:12px;color:#888a96;margin:0 0 10px}
-.composer{max-width:820px;margin:auto;display:flex;gap:10px;padding:10px;background:#1b1c22;border:1px solid #383943;border-radius:18px}
-textarea{flex:1;min-width:0;resize:none;max-height:150px;border:0;outline:0;color:white;background:transparent;padding:10px;line-height:1.5}
-.send{width:44px;height:44px;align-self:flex-end;border:0;border-radius:13px;background:#8b5cf6;color:white;font-size:20px}
-.auth-wrap{max-width:420px;margin:7vh auto;padding:24px;background:#191a20;border:1px solid #30313a;border-radius:18px}
-.auth-wrap h1{font-size:28px}
-.auth-wrap input{display:block;width:100%;margin:12px 0;padding:13px;border-radius:10px;border:1px solid #383943;background:#101114;color:white}
-.auth-wrap button{padding:11px 14px;border:0;border-radius:10px;background:#8b5cf6;color:white;margin:5px 5px 5px 0}
-#authStatus{overflow-wrap:anywhere;color:#c4b5fd;line-height:1.5}
-#signOut{background:#30313a;border:1px solid #484956;color:white;padding:7px 10px;border-radius:9px}
-@media(max-width:700px){
-.sidebar{display:none;position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:20px 0 80px #0009}
-.sidebar.open{display:flex}
-.menu-button{display:block;background:#22232a;color:white;border:1px solid #34353e;border-radius:8px;padding:8px}
-header{padding:0 12px;gap:10px}
-.messages{padding:22px 12px}
-.suggestions{grid-template-columns:1fr}
-.composer-wrap{padding:10px 10px 14px}
-}
-</style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      --bg: #0b0b12;
+      --panel: #13131e;
+      --panel2: #1b1b2a;
+      --border: #29293c;
+      --text: #f5f5ff;
+      --muted: #a3a3bd;
+      --accent: #9b75ff;
+      --accent2: #6d4aff;
+      --danger: #ff6b81;
+      --success: #6ee7b7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+
+    .hidden { display: none !important; }
+
+    .auth-screen {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      background:
+        radial-gradient(ellipse at 15% 15%, #30205b66, transparent 45%),
+        radial-gradient(ellipse at 90% 85%, #44257b44, transparent 40%),
+        var(--bg);
+    }
+
+    .auth-card {
+      width: 100%;
+      max-width: 420px;
+      background: #141420ee;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 25px 90px #0008;
+    }
+
+    .logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      font-size: 25px;
+      background: linear-gradient(135deg, var(--accent), #5234d8);
+      box-shadow: 0 8px 30px #8d62ff44;
+    }
+
+    h1 { font-size: 27px; margin: 17px 0 6px; }
+    .subtitle { color: var(--muted); margin: 0 0 24px; line-height: 1.5; }
+
+    .field { margin-bottom: 15px; }
+
+    .field label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+      color: #d7d7e9;
+    }
+
+    .field input {
+      width: 100%;
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #0c0c15;
+      color: var(--text);
+      outline: none;
+    }
+
+    .field input:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px #9b75ff22;
+    }
+
+    .primary, .secondary {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-weight: 650;
+      transition: .2s;
+    }
+
+    .primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: white;
+    }
+
+    .primary:hover { filter: brightness(1.12); }
+    .primary:disabled { opacity: .55; cursor: wait; }
+
+    .full { width: 100%; }
+
+    .switch-text {
+      text-align: center;
+      color: var(--muted);
+      margin: 20px 0 0;
+      font-size: 14px;
+    }
+
+    .text-button {
+      background: none;
+      border: 0;
+      color: #bca8ff;
+      font-weight: 650;
+      padding: 4px;
+    }
+
+    .notice {
+      margin-top: 14px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: #252536;
+      color: #ddd;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .notice.error { color: #ffc1ca; background: #4a202c66; }
+    .notice.success { color: #a7f3d0; background: #103b3066; }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+    }
+
+    aside {
+      background: #101019;
+      border-right: 1px solid var(--border);
+      padding: 20px 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 5px;
+      font-weight: 750;
+      font-size: 19px;
+    }
+
+    .brand .logo { width: 38px; height: 38px; font-size: 20px; }
+
+    .new-chat {
+      width: 100%;
+      text-align: left;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px;
+      border-radius: 12px;
+    }
+
+    .sidebar-label {
+      color: #77778f;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding: 0 5px;
+    }
+
+    .sidebar-info {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+      padding: 0 5px;
+    }
+
+    .account {
+      margin-top: auto;
+      border-top: 1px solid var(--border);
+      padding-top: 15px;
+    }
+
+    .account-email {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      margin: 0 0 12px;
+    }
+
+    .secondary {
+      background: #252536;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    main {
+      min-width: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 64px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      gap: 12px;
+    }
+
+    .topbar-title { font-weight: 650; }
+    .status { color: var(--success); font-size: 12px; }
+
+    .chat-area {
+      flex: 1;
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 30px 22px 16px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .welcome {
+      text-align: center;
+      margin: auto 0 25px;
+      padding-top: 35px;
+    }
+
+    .welcome .logo { margin: 0 auto 18px; width: 58px; height: 58px; }
+
+    .welcome h2 { font-size: clamp(25px, 4vw, 36px); margin: 0 0 10px; }
+    .welcome p { color: var(--muted); margin: 0; }
+
+    .suggestions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 0 0 22px;
+    }
+
+    .suggestion {
+      text-align: left;
+      color: #deddf0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      line-height: 1.4;
+    }
+
+    .suggestion:hover { border-color: var(--accent); }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding-bottom: 25px;
+    }
+
+    .message {
+      padding: 15px 17px;
+      border-radius: 16px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-width: 100%;
+    }
+
+    .message.user {
+      align-self: flex-end;
+      background: #35285b;
+      max-width: 85%;
+    }
+
+    .message.assistant {
+      align-self: stretch;
+      background: var(--panel);
+      border: 1px solid var(--border);
+    }
+
+    .message-role {
+      color: #c3afff;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 5px;
+    }
+
+    .composer {
+      position: sticky;
+      bottom: 0;
+      padding: 12px 0 6px;
+      background: linear-gradient(transparent, var(--bg) 18%);
+    }
+
+    .composer-box {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 17px;
+      padding: 10px;
+    }
+
+    textarea {
+      flex: 1;
+      min-width: 0;
+      resize: none;
+      max-height: 180px;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      padding: 8px;
+      line-height: 1.5;
+    }
+
+    .send-button {
+      min-width: 43px;
+      height: 43px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--accent2);
+      color: white;
+      font-size: 20px;
+    }
+
+    .footnote {
+      text-align: center;
+      font-size: 11px;
+      color: #77778f;
+      margin: 10px 0 0;
+    }
+
+    @media (max-width: 700px) {
+      .app { grid-template-columns: 1fr; }
+      aside { display: none; }
+      .topbar { padding: 0 16px; }
+      .chat-area { padding: 20px 14px 12px; }
+      .suggestions { grid-template-columns: 1fr; }
+      .welcome { margin-top: 30px; }
+      .auth-card { padding: 23px; }
+    }
+  </style>
 </head>
 
 <body>
+  <section id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <div class="logo">✦</div>
+      <h1 id="authTitle">Welcome to Nova</h1>
+      <p class="subtitle" id="authSubtitle">Sign in to start your AI conversation.</p>
 
-<section class="auth-wrap" id="authPanel">
-  <div class="brand">✦ Nova <span>AI</span></div>
-  <h1>Welcome back</h1>
-  <p class="muted">Sign in or create an account to chat with Nova AI.</p>
-
-  <form id="authForm">
-    <input id="authEmail" type="email" placeholder="Email address"
-      autocomplete="email" required maxlength="254">
-    <input id="authPassword" type="password" placeholder="Password"
-      autocomplete="current-password" required minlength="8" maxlength="128">
-    <button type="submit" id="signInButton">Sign in</button>
-    <button type="button" id="signUpButton">Create account</button>
-  </form>
-  <p id="authStatus" role="status">Connect to your Supabase project to continue.</p>
-</section>
-
-<div class="app" id="app">
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">✦ Nova <span>AI</span></div>
-    <button class="new-chat" id="newChat">＋ New chat</button>
-    <div class="section-label">RECENT CHATS</div>
-    <div id="history"></div>
-    <div class="account">
-      <span id="accountEmail">Signed in</span><br>
-      <button id="signOut">Sign out</button>
-    </div>
-  </aside>
-
-  <main class="main">
-    <header>
-      <button class="menu-button" id="menuButton" aria-label="Open menu">☰</button>
-      <strong>Nova AI Chat</strong>
-      <span class="model">Gemini · Backend API</span>
-    </header>
-
-    <section class="messages" id="messages" aria-live="polite">
-      <div class="welcome" id="welcome">
-        <div class="orb">✦</div>
-        <h1>What can we explore?</h1>
-        <p class="muted">A fresh space for ideas, learning, writing and problem-solving.</p>
-        <div class="suggestions">
-          <button data-prompt="Explain artificial intelligence in simple terms.">
-            ✧ Learn something new<br><span class="muted">Understand a complex topic</span>
-          </button>
-          <button data-prompt="Help me brainstorm a creative project idea.">
-            ✧ Brainstorm ideas<br><span class="muted">Turn an idea into a plan</span>
-          </button>
-          <button data-prompt="Help me improve this piece of writing.">
-            ✧ Improve my writing<br><span class="muted">Make a draft clearer</span>
-          </button>
-          <button data-prompt="Help me understand a programming problem.">
-            ✧ Solve a coding problem<br><span class="muted">Learn step by step</span>
-          </button>
+      <form id="authForm">
+        <div class="field">
+          <label for="email">Email address</label>
+          <input id="email" type="email" autocomplete="email" required
+                 placeholder="you@example.com">
         </div>
-      </div>
-    </section>
 
-    <div class="composer-wrap">
-      <p class="notice" id="status">Signed in · Ready to chat</p>
-      <form class="composer" id="chatForm">
-        <textarea id="prompt" rows="1" maxlength="8000"
-          placeholder="Message Nova AI..." aria-label="Your message"></textarea>
-        <button class="send" id="sendButton" type="submit" aria-label="Send">↑</button>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password"
+                 minlength="6" required placeholder="At least 6 characters">
+        </div>
+
+        <button id="authSubmit" class="primary full" type="submit">Sign In</button>
       </form>
+
+      <p class="switch-text">
+        <span id="switchLabel">New to Nova?</span>
+        <button id="switchMode" class="text-button" type="button">Create account</button>
+      </p>
+
+      <div id="authNotice" class="notice hidden" role="status"></div>
     </div>
-  </main>
-</div>
+  </section>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <section id="appScreen" class="app hidden">
+    <aside>
+      <div class="brand">
+        <div class="logo">✦</div>
+        <span>Nova AI</span>
+      </div>
 
-<script>
-"use strict";
+      <button id="newChatButton" class="new-chat">＋ &nbsp; New conversation</button>
 
-/*
-  Replace these two placeholders with your actual Supabase values.
-  Only use your project URL and publishable/legacy anon key here.
-  NEVER put the service-role key or Gemini API key in this file.
-*/
-const SUPABASE_URL = "YOUR_SUPABASE_PROJECT_URL";
-const SUPABASE_PUBLISHABLE_KEY = "YOUR_SUPABASE_PUBLISHABLE_KEY";
+      <div class="sidebar-label">Your workspace</div>
+      <div class="sidebar-info">
+        Ask questions, brainstorm ideas, learn concepts, or get help with coding.
+      </div>
 
-const authPanel = document.getElementById("authPanel");
-const authStatus = document.getElementById("authStatus");
-const app = document.getElementById("app");
-const sidebar = document.getElementById("sidebar");
-const messages = document.getElementById("messages");
-const promptBox = document.getElementById("prompt");
-const statusBox = document.getElementById("status");
-const historyBox = document.getElementById("history");
-const sendButton = document.getElementById("sendButton");
+      <div class="account">
+        <p id="accountEmail" class="account-email"></p>
+        <button id="signOutButton" class="secondary full">Sign out</button>
+      </div>
+    </aside>
 
-let supabaseClient = null;
-let chats = [];
-let activeChat = [];
-let sending = false;
+    <main>
+      <header class="topbar">
+        <div class="topbar-title">Nova AI Chat</div>
+        <div id="connectionStatus" class="status">Checking session…</div>
+      </header>
 
-function setAuthMessage(text) {
-  authStatus.textContent = text;
-}
+      <div class="chat-area">
+        <div id="welcome" class="welcome">
+          <div class="logo">✦</div>
+          <h2>What can I help you with?</h2>
+          <p>Ask anything. Let's work through it together.</p>
+        </div>
 
-function showLogin() {
-  authPanel.style.display = "block";
-  app.style.display = "none";
-}
+        <div id="suggestions" class="suggestions">
+          <button class="suggestion" type="button">Explain artificial intelligence simply</button>
+          <button class="suggestion" type="button">Help me build a website</button>
+          <button class="suggestion" type="button">Create a study plan for college</button>
+          <button class="suggestion" type="button">Help me debug my code</button>
+        </div>
 
-function showApp(email) {
-  authPanel.style.display = "none";
-  app.style.display = "flex";
-  document.getElementById("accountEmail").textContent = email || "Signed in";
-}
+        <div id="messages" class="messages" aria-live="polite"></div>
 
-async function getSession() {
-  if (!supabaseClient) return null;
-  const { data, error } = await supabaseClient.auth.getSession();
-  if (error) throw error;
-  return data.session;
-}
+        <form id="chatForm" class="composer">
+          <div class="composer-box">
+            <textarea id="messageInput" rows="1" maxlength="10000"
+              aria-label="Your message"
+              placeholder="Message Nova…"></textarea>
+            <button id="sendButton" class="send-button" type="submit"
+              aria-label="Send message">↑</button>
+          </div>
+          <p class="footnote">AI can make mistakes. Check important information.</p>
+        </form>
+      </div>
+    </main>
+  </section>
 
-async function refreshAuth() {
-  try {
-    const session = await getSession();
+  <script>
+    "use strict";
 
-    if (session) {
-      showApp(session.user.email);
-    } else {
-      showLogin();
+    // Supabase project configuration.
+    const SUPABASE_URL = "https://uotkikyplykrscqzrsfj.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY =
+      "sb_publishable_wtn1LJL6nKItxTOIbNBVYA_mza7UhT0";
+
+    const supabaseReady =
+      SUPABASE_URL.startsWith("https://") &&
+      !SUPABASE_URL.includes("YOUR_") &&
+      SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_") &&
+      !SUPABASE_PUBLISHABLE_KEY.includes("YOUR_");
+
+    const authScreen = document.getElementById("authScreen");
+    const appScreen = document.getElementById("appScreen");
+    const authForm = document.getElementById("authForm");
+    const authNotice = document.getElementById("authNotice");
+    const authTitle = document.getElementById("authTitle");
+    const authSubtitle = document.getElementById("authSubtitle");
+    const authSubmit = document.getElementById("authSubmit");
+    const switchMode = document.getElementById("switchMode");
+    const switchLabel = document.getElementById("switchLabel");
+    const accountEmail = document.getElementById("accountEmail");
+    const connectionStatus = document.getElementById("connectionStatus");
+    const messageInput = document.getElementById("messageInput");
+    const chatForm = document.getElementById("chatForm");
+    const sendButton = document.getElementById("sendButton");
+    const messages = document.getElementById("messages");
+    const welcome = document.getElementById("welcome");
+    const suggestions = document.getElementById("suggestions");
+
+    let supabaseClient = null;
+    let isSignUp = false;
+    let sending = false;
+
+    function showNotice(element, text, type = "") {
+      element.textContent = text;
+      element.className = "notice" + (type ? " " + type : "");
+      element.classList.remove("hidden");
     }
 
-    return session;
-  } catch {
-    showLogin();
-    setAuthMessage("Unable to verify your session. Please sign in again.");
-    return null;
-  }
-}
-
-document.getElementById("authForm").addEventListener("submit", async event => {
-  event.preventDefault();
-
-  if (!supabaseClient) {
-    setAuthMessage("Supabase is not configured. Update the URL and publishable key in index.html.");
-    return;
-  }
-
-  const email = document.getElementById("authEmail").value.trim();
-  const password = document.getElementById("authPassword").value;
-  const button = document.getElementById("signInButton");
-
-  button.disabled = true;
-  setAuthMessage("Signing in...");
-
-  try {
-    const { error } = await supabaseClient.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) throw error;
-
-    await refreshAuth();
-    setAuthMessage("");
-  } catch (error) {
-    setAuthMessage(error.message || "Sign-in failed.");
-  } finally {
-    button.disabled = false;
-  }
-});
-
-document.getElementById("signUpButton").addEventListener("click", async () => {
-  if (!supabaseClient) {
-    setAuthMessage("Configure the Supabase URL and publishable key first.");
-    return;
-  }
-
-  const email = document.getElementById("authEmail").value.trim();
-  const password = document.getElementById("authPassword").value;
-
-  if (!email || password.length < 8) {
-    setAuthMessage("Enter a valid email and a password of at least 8 characters.");
-    return;
-  }
-
-  const button = document.getElementById("signUpButton");
-  button.disabled = true;
-  setAuthMessage("Creating account...");
-
-  try {
-    const { data, error } = await supabaseClient.auth.signUp({
-      email,
-      password
-    });
-
-    if (error) throw error;
-
-    if (data.session) {
-      await refreshAuth();
-      setAuthMessage("Account created successfully.");
-    } else {
-      setAuthMessage("Account created. Check your email to verify your account, then sign in.");
+    function clearNotice(element) {
+      element.textContent = "";
+      element.className = "notice hidden";
     }
-  } catch (error) {
-    setAuthMessage(error.message || "Account creation failed.");
-  } finally {
-    button.disabled = false;
-  }
-});
 
-document.getElementById("signOut").addEventListener("click", async () => {
-  if (!supabaseClient) return;
+    function showAuth() {
+      authScreen.classList.remove("hidden");
+      appScreen.classList.add("hidden");
+    }
 
-  const { error } = await supabaseClient.auth.signOut();
+    function showApp(user) {
+      authScreen.classList.add("hidden");
+      appScreen.classList.remove("hidden");
+      accountEmail.textContent = user.email || "Signed in";
+      connectionStatus.textContent = "● Signed in";
+    }
 
-  if (error) {
-    statusBox.textContent = "Sign-out failed. Try again.";
-    return;
-  }
+    function updateAuthMode() {
+      clearNotice(authNotice);
 
-  chats = [];
-  activeChat = [];
-  renderHistory();
-  showLogin();
-  setAuthMessage("You have signed out.");
-});
-
-supabaseClient = (() => {
-  if (
-    !window.supabase ||
-    SUPABASE_URL === "YOUR_SUPABASE_PROJECT_URL" ||
-    SUPABASE_PUBLISHABLE_KEY === "YOUR_SUPABASE_PUBLISHABLE_KEY"
-  ) {
-    setAuthMessage("Setup required: enter your Supabase URL and publishable key in index.html.");
-    return null;
-  }
-
-  try {
-    return window.supabase.createClient(
-      SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY,
-      {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true
-        }
+      if (isSignUp) {
+        authTitle.textContent = "Create your account";
+        authSubtitle.textContent = "Join Nova to start chatting.";
+        authSubmit.textContent = "Create Account";
+        switchLabel.textContent = "Already have an account?";
+        switchMode.textContent = "Sign in";
+        document.getElementById("password").autocomplete = "new-password";
+      } else {
+        authTitle.textContent = "Welcome to Nova";
+        authSubtitle.textContent = "Sign in to start your AI conversation.";
+        authSubmit.textContent = "Sign In";
+        switchLabel.textContent = "New to Nova?";
+        switchMode.textContent = "Create account";
+        document.getElementById("password").autocomplete = "current-password";
       }
-    );
-  } catch {
-    setAuthMessage("Could not initialize Supabase. Check your configuration.");
-    return null;
-  }
-})();
-
-if (supabaseClient) {
-  supabaseClient.auth.onAuthStateChange((_event, session) => {
-    if (session) showApp(session.user.email);
-    else showLogin();
-  });
-
-  refreshAuth();
-}
-
-function renderMessage(role, text) {
-  const wrapper = document.createElement("div");
-  wrapper.className = `message ${role}`;
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-
-  wrapper.appendChild(bubble);
-  messages.appendChild(wrapper);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function showWelcome() {
-  messages.replaceChildren();
-
-  const welcome = document.createElement("div");
-  welcome.className = "welcome";
-
-  const orb = document.createElement("div");
-  orb.className = "orb";
-  orb.textContent = "✦";
-
-  const heading = document.createElement("h1");
-  heading.textContent = "What can we explore?";
-
-  const description = document.createElement("p");
-  description.className = "muted";
-  description.textContent = "A fresh space for ideas, learning, writing and problem-solving.";
-
-  const suggestions = document.createElement("div");
-  suggestions.className = "suggestions";
-
-  const prompts = [
-    ["Learn something new", "Explain artificial intelligence in simple terms."],
-    ["Brainstorm ideas", "Help me brainstorm a creative project idea."],
-    ["Improve my writing", "Help me improve this piece of writing."],
-    ["Solve a coding problem", "Help me understand a programming problem."]
-  ];
-
-  for (const [title, prompt] of prompts) {
-    const button = document.createElement("button");
-    button.textContent = "✧ " + title;
-    button.addEventListener("click", () => {
-      promptBox.value = prompt;
-      promptBox.focus();
-    });
-    suggestions.appendChild(button);
-  }
-
-  welcome.append(orb, heading, description, suggestions);
-  messages.appendChild(welcome);
-}
-
-function showChat() {
-  messages.replaceChildren();
-
-  if (!activeChat.length) {
-    showWelcome();
-    return;
-  }
-
-  activeChat.forEach(item => renderMessage(item.role, item.text));
-}
-
-function renderHistory() {
-  historyBox.replaceChildren();
-
-  chats.forEach((chat, index) => {
-    const button = document.createElement("button");
-    button.className = "history-item";
-    button.textContent = chat[0]?.text.slice(0, 35) || `Chat ${index + 1}`;
-
-    button.addEventListener("click", () => {
-      activeChat = chat;
-      showChat();
-      sidebar.classList.remove("open");
-    });
-
-    historyBox.appendChild(button);
-  });
-}
-
-document.getElementById("newChat").addEventListener("click", () => {
-  if (activeChat.length) chats.push(activeChat);
-
-  activeChat = [];
-  showWelcome();
-  renderHistory();
-  promptBox.focus();
-});
-
-document.getElementById("menuButton").addEventListener("click", () => {
-  sidebar.classList.toggle("open");
-});
-
-promptBox.addEventListener("input", () => {
-  promptBox.style.height = "auto";
-  promptBox.style.height = Math.min(promptBox.scrollHeight, 150) + "px";
-});
-
-document.getElementById("chatForm").addEventListener("submit", async event => {
-  event.preventDefault();
-
-  if (sending) return;
-
-  const text = promptBox.value.trim();
-  if (!text) return;
-
-  let session;
-
-  try {
-    session = await getSession();
-  } catch {
-    showLogin();
-    setAuthMessage("Your session could not be verified. Please sign in again.");
-    return;
-  }
-
-  if (!session) {
-    showLogin();
-    setAuthMessage("Please sign in before chatting.");
-    return;
-  }
-
-  if (activeChat.length === 0) messages.replaceChildren();
-
-  activeChat.push({ role: "user", text });
-  renderMessage("user", text);
-
-  promptBox.value = "";
-  promptBox.style.height = "auto";
-  sending = true;
-  sendButton.disabled = true;
-  statusBox.textContent = "Waiting for Gemini...";
-
-  try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify({
-        messages: activeChat.map(item => ({
-          role: item.role,
-          content: item.text
-        }))
-      })
-    });
-
-    const result = await response.json();
-
-    if (response.status === 401) {
-      showLogin();
-      setAuthMessage("Your session expired. Please sign in again.");
-      return;
     }
 
-    if (!response.ok) {
-      throw new Error(result.error || `Request failed (${response.status})`);
+    switchMode.addEventListener("click", () => {
+      isSignUp = !isSignUp;
+      updateAuthMode();
+    });
+
+    async function initialize() {
+      if (!supabaseReady) {
+        connectionStatus.textContent = "Configuration required";
+        showAuth();
+        showNotice(authNotice, "Supabase configuration is incomplete.");
+        authSubmit.disabled = true;
+        return;
+      }
+
+      if (!window.supabase || !window.supabase.createClient) {
+        showAuth();
+        showNotice(authNotice, "Supabase library failed to load. Check your internet connection.");
+        return;
+      }
+
+      supabaseClient = window.supabase.createClient(
+        SUPABASE_URL,
+        SUPABASE_PUBLISHABLE_KEY,
+        {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true
+          }
+        }
+      );
+
+      connectionStatus.textContent = "Checking session…";
+
+      const { data, error } = await supabaseClient.auth.getSession();
+
+      if (error) {
+        showAuth();
+        showNotice(authNotice, error.message, "error");
+        return;
+      }
+
+      if (data.session && data.session.user) {
+        showApp(data.session.user);
+      } else {
+        showAuth();
+      }
+
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        if (session && session.user) {
+          showApp(session.user);
+        } else {
+          showAuth();
+        }
+      });
     }
 
-    if (typeof result.answer !== "string" || !result.answer) {
-      throw new Error("The backend returned an invalid response.");
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      clearNotice(authNotice);
+
+      if (!supabaseClient) {
+        showNotice(authNotice, "Supabase is not configured.", "error");
+        return;
+      }
+
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      authSubmit.disabled = true;
+      authSubmit.textContent = isSignUp ? "Creating account…" : "Signing in…";
+
+      try {
+        if (isSignUp) {
+          const { data, error } = await supabaseClient.auth.signUp({
+            email,
+            password
+          });
+
+          if (error) throw error;
+
+          if (data.session && data.user) {
+            showApp(data.user);
+          } else {
+            showNotice(
+              authNotice,
+              "Account created. Check your email for a confirmation link, then sign in.",
+              "success"
+            );
+          }
+        } else {
+          const { data, error } =
+            await supabaseClient.auth.signInWithPassword({ email, password });
+
+          if (error) throw error;
+
+          showApp(data.user);
+        }
+      } catch (error) {
+        showNotice(authNotice, error.message || "Authentication failed.", "error");
+      } finally {
+        authSubmit.disabled = false;
+        authSubmit.textContent = isSignUp ? "Create Account" : "Sign In";
+      }
+    });
+
+    document.getElementById("signOutButton").addEventListener("click", async () => {
+      if (!supabaseClient) return;
+
+      const { error } = await supabaseClient.auth.signOut();
+
+      if (error) {
+        connectionStatus.textContent = "Sign-out failed";
+        return;
+      }
+
+      messages.replaceChildren();
+      showAuth();
+    });
+
+    function addMessage(role, content) {
+      welcome.classList.add("hidden");
+      suggestions.classList.add("hidden");
+
+      const bubble = document.createElement("div");
+      bubble.className = "message " + role;
+
+      const label = document.createElement("div");
+      label.className = "message-role";
+      label.textContent = role === "user" ? "You" : "Nova";
+
+      const body = document.createElement("div");
+      body.textContent = content;
+
+      bubble.append(label, body);
+      messages.appendChild(bubble);
+      bubble.scrollIntoView({ behavior: "smooth", block: "end" });
+
+      return { bubble, body };
     }
 
-    activeChat.push({ role: "assistant", text: result.answer });
-    renderMessage("assistant", result.answer);
-    statusBox.textContent = "Response received from Gemini.";
-    renderHistory();
-  } catch (error) {
-    const safeMessage = error.message || "Unknown error";
-    renderMessage("assistant", "Request failed: " + safeMessage);
-    statusBox.textContent = "The request could not be completed.";
-  } finally {
-    sending = false;
-    sendButton.disabled = false;
-  }
-});
+    function resetChat() {
+      messages.replaceChildren();
+      welcome.classList.remove("hidden");
+      suggestions.classList.remove("hidden");
+      messageInput.value = "";
+      messageInput.style.height = "auto";
+      messageInput.focus();
+    }
 
-document.querySelectorAll("[data-prompt]").forEach(button => {
-  button.addEventListener("click", () => {
-    promptBox.value = button.dataset.prompt;
-    promptBox.focus();
-  });
-});
-</script>
+    document.getElementById("newChatButton").addEventListener("click", resetChat);
 
+    suggestions.addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (!button) return;
+
+      messageInput.value = button.textContent.trim();
+      messageInput.focus();
+      messageInput.dispatchEvent(new Event("input"));
+    });
+
+    messageInput.addEventListener("input", () => {
+      messageInput.style.height = "auto";
+      messageInput.style.height =
+        Math.min(messageInput.scrollHeight, 180) + "px";
+    });
+
+    messageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        chatForm.requestSubmit();
+      }
+    });
+
+    chatForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      if (sending) return;
+
+      const message = messageInput.value.trim();
+      if (!message) return;
+
+      if (!supabaseClient) {
+        addMessage("assistant", "Supabase is not configured. Please check the setup.");
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } =
+        await supabaseClient.auth.getSession();
+
+      if (sessionError || !sessionData.session) {
+        showAuth();
+        showNotice(authNotice, "Your session expired. Please sign in again.", "error");
+        return;
+      }
+
+      messageInput.value = "";
+      messageInput.style.height = "auto";
+      addMessage("user", message);
+
+      const response = addMessage("assistant", "Thinking…");
+
+      sending = true;
+      sendButton.disabled = true;
+      connectionStatus.textContent = "● Generating response…";
+
+      try {
+        const responseFromServer = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + sessionData.session.access_token
+          },
+          body: JSON.stringify({ message })
+        });
+
+        const result = await responseFromServer.json().catch(() => ({}));
+
+        if (!responseFromServer.ok) {
+          throw new Error(
+            result.error || "Chat request failed with status " +
+            responseFromServer.status
+          );
+        }
+
+        const answer =
+          typeof result.reply === "string" ? result.reply :
+          typeof result.response === "string" ? result.response :
+          null;
+
+        if (!answer) {
+          throw new Error("The backend returned no reply. Check the /api/chat implementation.");
+        }
+
+        response.body.textContent = answer;
+      } catch (error) {
+        response.body.textContent =
+          "I couldn't get a response from the backend.\n\n" +
+          (error.message || "Unknown error") +
+          "\n\nCheck that the /api/chat backend is deployed and its environment variables are configured.";
+      } finally {
+        sending = false;
+        sendButton.disabled = false;
+        connectionStatus.textContent = "● Signed in";
+        messageInput.focus();
+      }
+    });
+
+    initialize().catch((error) => {
+      showAuth();
+      showNotice(
+        authNotice,
+        "Initialization failed: " + (error.message || "Unknown error"),
+        "error"
+      );
+    });
+  </script>
 </body>
   </html>
