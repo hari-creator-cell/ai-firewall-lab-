@@ -1,347 +1,277 @@
-const crypto = require("node:crypto");
-
 const CONFIG = {
-  url: process.env.supabase_url,
+  // These names must match the Environment Variables in Vercel.
+  url: process.env.SUPABASE_URL,
   anonKey: process.env.supabase_anon_key,
   serviceKey: process.env.supabase_service_role_key,
-  geminiKey: process.env.gemini_api_key,
-  model: process.env.gemini_model || "gemini-2.5-flash",
+  geminiKey: process.env.GEMINI_API_KEY,
+  model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
 };
 
-function send(res, status, data) {
-  return res.status(status).json(data);
+const MAX_MESSAGES = 30;
+const MAX_MESSAGE_LENGTH = 12000;
+const MAX_TOTAL_LENGTH = 30000;
+
+function sendJson(res, status, body) {
+  return res.status(status).json(body);
 }
 
-async function supabaseRequest(path, options = {}) {
-  const response = await fetch(`${CONFIG.url}/rest/v1/${path}`, {
-    ...options,
+function getMissingConfig() {
+  const required = {
+    SUPABASE_URL: CONFIG.url,
+    supabase_anon_key: CONFIG.anonKey,
+    supabase_service_role_key: CONFIG.serviceKey,
+    GEMINI_API_KEY: CONFIG.geminiKey,
+  };
+
+  return Object.entries(required)
+    .filter(([, value]) => !value || !String(value).trim())
+    .map(([name]) => name);
+}
+
+function getBearerToken(req) {
+  const authorization = req.headers.authorization || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}
+
+function validateMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "messages must be a non-empty array.";
+  }
+
+  if (messages.length > MAX_MESSAGES) {
+    return `A maximum of ${MAX_MESSAGES} messages is allowed.`;
+  }
+
+  let totalLength = 0;
+
+  for (const message of messages) {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !["user", "assistant"].includes(message.role) ||
+      typeof message.content !== "string"
+    ) {
+      return "Each message must have a valid role and string content.";
+    }
+
+    if (message.content.length > MAX_MESSAGE_LENGTH) {
+      return "A message exceeds the maximum allowed length.";
+    }
+
+    totalLength += message.content.length;
+  }
+
+  if (totalLength > MAX_TOTAL_LENGTH) {
+    return "The conversation exceeds the maximum allowed size.";
+  }
+
+  return null;
+}
+
+function toGeminiContents(messages) {
+  // Gemini expects user/model roles and alternating conversational turns.
+  const contents = [];
+
+  for (const message of messages) {
+    const role = message.role === "assistant" ? "model" : "user";
+    const text = message.content.trim();
+
+    if (!text) continue;
+
+    const last = contents[contents.length - 1];
+
+    if (last && last.role === role) {
+      last.parts[0].text += "\n\n" + text;
+    } else {
+      contents.push({
+        role,
+        parts: [{ text }],
+      });
+    }
+  }
+
+  // Gemini conversations must start with a user message.
+  while (contents.length && contents[0].role !== "user") {
+    contents.shift();
+  }
+
+  return contents;
+}
+
+async function authenticateUser(token) {
+  const response = await fetch(`${CONFIG.url.replace(/\/+$/, "")}/auth/v1/user`, {
+    method: "GET",
     headers: {
-      apikey: CONFIG.serviceKey,
-      Authorization: `Bearer ${CONFIG.serviceKey}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
+      apikey: CONFIG.anonKey,
+      Authorization: `Bearer ${token}`,
     },
-    signal: AbortSignal.timeout(10000),
   });
 
-  const text = await response.text();
+  if (!response.ok) return null;
 
-  let data = null;
+  const user = await response.json();
 
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error("Invalid database response");
-  }
+  if (!user || typeof user.id !== "string") return null;
+
+  return user;
+}
+
+async function callGemini(messages) {
+  const endpoint =
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+    encodeURIComponent(CONFIG.model) +
+    ":generateContent";
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": CONFIG.geminiKey,
+    },
+    body: JSON.stringify({
+      contents: messages,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+      },
+    }),
+    signal: AbortSignal.timeout(45000),
+  });
+
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(`Database operation failed: ${response.status}`);
+    const error = new Error("Gemini request failed.");
+    error.status = response.status;
+    error.providerMessage =
+      typeof data?.error?.message === "string"
+        ? data.error.message
+        : "The AI provider returned an error.";
+    throw error;
   }
 
-  return data;
-}
+  const answer = (data.candidates || [])
+    .flatMap((candidate) => candidate.content?.parts || [])
+    .map((part) => part.text || "")
+    .join("")
+    .trim();
 
-async function writeAudit({
-  userId,
-  requestId,
-  prompt,
-  verdict,
-  status,
-  reason,
-}) {
-  const promptHash = crypto
-    .createHash("sha256")
-    .update(prompt)
-    .digest("hex");
+  if (!answer) {
+    throw new Error("The AI provider returned an empty response.");
+  }
 
-  await supabaseRequest("chat_audit_logs", {
-    method: "POST",
-    headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({
-      user_id: userId,
-      request_id: requestId,
-      prompt_hash: promptHash,
-      prompt_snippet: "[REDACTED]",
-      verdict,
-      risk_score: 0,
-      violation_reason: reason || null,
-      gemini_model: CONFIG.model,
-      execution_status: status,
-    }),
-  });
+  return answer;
 }
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-
-    return send(res, 405, {
-      error: "Method not allowed",
+    return sendJson(res, 405, {
+      error: "Method not allowed. Use POST.",
     });
   }
 
-  const missing = Object.entries(CONFIG)
-    .filter(([name, value]) => name !== "model" && !value)
-    .map(([name]) => name);
+  // Do not expose internal configuration or secrets in responses.
+  const missing = getMissingConfig();
 
-  if (missing.length) {
-    return send(res, 503, {
-      error: "Server configuration incomplete",
+  if (missing.length > 0) {
+    console.error("Chat API configuration is incomplete:", missing);
+
+    return sendJson(res, 503, {
+      error: "Server configuration incomplete.",
       missing,
+      hint: "Check the Environment Variables configured for this Vercel deployment.",
     });
   }
 
-  const requestId = crypto.randomUUID();
-  const authorization = req.headers.authorization || "";
-  const token = authorization.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const token = getBearerToken(req);
 
   if (!token) {
-    return send(res, 401, {
-      error: "Please sign in first",
+    return sendJson(res, 401, {
+      error: "Authentication required. Please sign in again.",
     });
   }
 
   let user;
 
   try {
-    const authResponse = await fetch(
-      `${CONFIG.url}/auth/v1/user`,
-      {
-        headers: {
-          apikey: CONFIG.anonKey,
-          Authorization: `Bearer ${token}`,
-        },
-        signal: AbortSignal.timeout(10000),
-      }
-    );
+    user = await authenticateUser(token);
+  } catch (error) {
+    console.error("Supabase authentication request failed:", error.message);
 
-    if (!authResponse.ok) {
-      return send(res, 401, {
-        error: "Invalid or expired session",
-      });
-    }
+    return sendJson(res, 502, {
+      error: "Could not verify your session. Please try again.",
+    });
+  }
 
-    user = await authResponse.json();
-
-    if (!user || typeof user.id !== "string") {
-      return send(res, 401, {
-        error: "Authentication failed",
-      });
-    }
-  } catch {
-    return send(res, 503, {
-      error: "Authentication service unavailable",
+  if (!user) {
+    return sendJson(res, 401, {
+      error: "Your session is invalid or expired. Please sign in again.",
     });
   }
 
   const body = req.body;
 
-  if (
-    !body ||
-    !Array.isArray(body.messages) ||
-    body.messages.length < 1 ||
-    body.messages.length > 20
-  ) {
-    return send(res, 400, {
-      error: "Invalid messages array",
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return sendJson(res, 400, {
+      error: "A valid JSON request body is required.",
     });
   }
 
-  const messages = [];
+  const validationError = validateMessages(body.messages);
 
-  for (const item of body.messages) {
-    if (
-      !item ||
-      !["user", "assistant"].includes(item.role) ||
-      typeof item.content !== "string" ||
-      !item.content.trim() ||
-      item.content.length > 8000
-    ) {
-      return send(res, 400, {
-        error: "Invalid message format",
-      });
-    }
-
-    messages.push({
-      role: item.role === "assistant" ? "model" : "user",
-      parts: [{ text: item.content }],
+  if (validationError) {
+    return sendJson(res, 400, {
+      error: validationError,
     });
   }
 
-  const lastUserMessage = [...body.messages]
-    .reverse()
-    .find(item => item.role === "user");
+  const contents = toGeminiContents(body.messages);
 
   if (
-    !lastUserMessage ||
-    body.messages[body.messages.length - 1].role !== "user"
+    contents.length === 0 ||
+    contents[0].role !== "user"
   ) {
-    return send(res, 400, {
-      error: "The last message must be from the user",
+    return sendJson(res, 400, {
+      error: "Provide at least one non-empty user message.",
     });
   }
-
-  const prompt = lastUserMessage.content;
-
-  let reserved = false;
-  let verdict = "deny";
 
   try {
-    // Atomically check and reserve quota in Supabase.
-    const quota = await supabaseRequest(
-      "rpc/check_and_increment_chat_quota",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          p_user_id: user.id,
-          p_max_per_minute: 10,
-          p_max_per_day: 100,
-          p_max_concurrent: 2,
-        }),
-      }
-    );
+    const reply = await callGemini(contents);
 
-    reserved = quota?.reserved === true;
+    return sendJson(res, 200, {
+      reply,
+      model: CONFIG.model,
+      status: "success",
+    });
+  } catch (error) {
+    console.error("Chat provider request failed:", {
+      status: error.status || null,
+      message: error.providerMessage || error.message,
+    });
 
-    if (quota?.allowed !== true) {
-      try {
-        await writeAudit({
-          userId: user.id,
-          requestId,
-          prompt,
-          verdict: "deny",
-          status: "quota_denied",
-          reason: quota?.reason || "Quota denied",
-        });
-      } catch {
-        return send(res, 503, {
-          error: "Unable to record the security decision",
-          requestId,
-        });
-      }
-
-      return send(res, 429, {
-        error: "Chat usage limit reached",
-        requestId,
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return sendJson(res, 504, {
+        error: "The AI provider took too long to respond. Please try again.",
       });
     }
 
-    /*
-      Prototype limitation:
-      This is a guarded chat endpoint, not the full tool-use
-      policy engine. It does not execute privileged tools.
-    */
-    verdict = "allow";
-
-    // Fail closed if the authorization event cannot be logged.
-    await writeAudit({
-      userId: user.id,
-      requestId,
-      prompt,
-      verdict,
-      status: "authorized",
-      reason: null,
-    });
-
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(CONFIG.model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": CONFIG.geminiKey,
-        },
-        body: JSON.stringify({
-          contents: messages,
-          generationConfig: {
-            maxOutputTokens: 2048,
-          },
-        }),
-        signal: AbortSignal.timeout(30000),
-      }
-    );
-
-    const result = await geminiResponse.json();
-
-    if (!geminiResponse.ok) {
-      try {
-        await writeAudit({
-          userId: user.id,
-          requestId,
-          prompt,
-          verdict,
-          status: "provider_error",
-          reason: "Gemini provider request failed",
-        });
-      } catch {
-        // Do not disclose internal database errors.
-      }
-
-      return send(res, 502, {
-        error: "The AI provider request failed",
-        requestId,
+    if (error.status === 429) {
+      return sendJson(res, 429, {
+        error: "The AI provider's rate limit or quota has been reached.",
       });
     }
 
-    const answer = result?.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("");
-
-    if (!answer) {
-      await writeAudit({
-        userId: user.id,
-        requestId,
-        prompt,
-        verdict,
-        status: "empty_response",
-        reason: "No text returned",
-      });
-
-      return send(res, 502, {
-        error: "The AI returned no text",
-        requestId,
+    if (error.status === 401 || error.status === 403) {
+      return sendJson(res, 502, {
+        error: "The AI provider rejected its server API credentials.",
       });
     }
 
-    // Log successful completion before returning the answer.
-    await writeAudit({
-      userId: user.id,
-      requestId,
-      prompt,
-      verdict,
-      status: "completed",
-      reason: null,
+    return sendJson(res, 502, {
+      error: "The AI provider could not complete your request.",
     });
-
-    return send(res, 200, {
-      answer,
-      requestId,
-    });
-  } catch {
-    console.error("Chat backend failure", requestId);
-
-    return send(res, 503, {
-      error: "The request failed or security logging is unavailable",
-      requestId,
-    });
-  } finally {
-    if (reserved) {
-      try {
-        await supabaseRequest(
-          "rpc/release_chat_concurrency",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              p_user_id: user.id,
-            }),
-          }
-        );
-      } catch {
-        console.error(
-          "Quota reservation release failed",
-          requestId
-        );
-      }
-    }
   }
 };
