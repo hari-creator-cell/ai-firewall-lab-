@@ -2,8 +2,6 @@
 const CONFIG = {
   supabaseUrl: process.env.supabase_url,
   supabaseAnonKey: process.env.supabase_anon_key,
-  openaiKey: process.env.OPENAI_API_KEY,
-  model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
   firewallUrl:
     "https://ai-firewall-lab-hackathon.vercel.app/api/inspect",
 };
@@ -11,7 +9,12 @@ const CONFIG = {
 const MAX_MESSAGES = 30;
 const MAX_MESSAGE_LENGTH = 12000;
 const MAX_TOTAL_LENGTH = 30000;
+const FIREWALL_MAX_CHARS = 12000;
+const REQUEST_TIMEOUT_MS = 10000;
 
+/**
+ * Validate chat history received from the frontend.
+ */
 function validateMessages(messages) {
   if (
     !Array.isArray(messages) ||
@@ -21,7 +24,7 @@ function validateMessages(messages) {
     throw new Error("Invalid message list.");
   }
 
-  let total = 0;
+  let totalLength = 0;
 
   for (const message of messages) {
     if (
@@ -34,24 +37,32 @@ function validateMessages(messages) {
       throw new Error("Invalid message.");
     }
 
-    total += message.content.length;
+    totalLength += message.content.length;
   }
 
-  if (total > MAX_TOTAL_LENGTH) {
+  if (totalLength > MAX_TOTAL_LENGTH) {
     throw new Error("Message history is too large.");
   }
 
   return messages;
 }
 
+/**
+ * Verify the user's Supabase access token.
+ */
 async function authenticateUser(token) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
 
   try {
     const response = await fetch(
       `${CONFIG.supabaseUrl}/auth/v1/user`,
       {
+        method: "GET",
         headers: {
           apikey: CONFIG.supabaseAnonKey,
           Authorization: `Bearer ${token}`,
@@ -60,110 +71,96 @@ async function authenticateUser(token) {
       }
     );
 
-    if (!response.ok) return false;
+    if (!response.ok) {
+      return false;
+    }
 
     const user = await response.json();
-    return Boolean(user?.id);
+
+    return Boolean(user && user.id);
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timeout);
   }
 }
 
-async function inspectWithFirewall(messages) {
-  const text = messages
-    .map(({ role, content }) => `[${role}] ${content.trim()}`)
-    .join("\n\n");
-
+/**
+ * Send a prompt to AI Firewall Lab.
+ * No AI provider or tool executor is called here.
+ */
+async function inspectPrompt(prompt) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
 
   try {
     const response = await fetch(CONFIG.firewallUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text: prompt,
+      }),
       signal: controller.signal,
     });
 
-    const result = await response.json().catch(() => ({}));
-
-    if (
-      !response.ok ||
-      !["ALLOW", "REVIEW", "BLOCK"].includes(result.decision)
-    ) {
-      throw new Error("Invalid or unavailable firewall response.");
-    }
-
-    return result;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function callOpenAI(messages) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-
-  try {
-    const response = await fetch(
-      "https://api.openai.com/v1/responses",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${CONFIG.openaiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: CONFIG.model,
-          input: messages.map(({ role, content }) => ({
-            role,
-            content: content.trim(),
-          })),
-          max_output_tokens: 2048,
-          store: false,
-        }),
-        signal: controller.signal,
-      }
-    );
-
-    const data = await response.json().catch(() => ({}));
+    const result = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const error = new Error("OpenAI request failed.");
-      error.status = response.status;
-      throw error;
+      throw new Error("Firewall request failed.");
     }
 
-    const reply = (data.output || [])
-      .filter((item) => item.type === "message")
-      .flatMap((item) => item.content || [])
-      .filter((part) => part.type === "output_text")
-      .map((part) => part.text)
-      .join("");
+    if (
+      !result ||
+      !["ALLOW", "REVIEW", "BLOCK"].includes(result.decision) ||
+      typeof result.score !== "number" ||
+      !Array.isArray(result.reasons)
+    ) {
+      throw new Error("Invalid firewall response.");
+    }
 
-    if (!reply) throw new Error("OpenAI returned no text.");
-
-    return reply;
+    return {
+      decision: result.decision,
+      score: result.score,
+      reasons: result.reasons.filter(
+        (reason) => typeof reason === "string"
+      ),
+      source: result.source || "AI Firewall Lab",
+    };
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timeout);
   }
 }
 
+/**
+ * Vercel serverless API endpoint.
+ */
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
+
     return res.status(405).json({
       error: "Method not allowed.",
     });
   }
 
+  // Check server configuration.
   let supabaseUrl;
 
   try {
+    if (
+      !CONFIG.supabaseUrl ||
+      !CONFIG.supabaseAnonKey
+    ) {
+      throw new Error("Missing configuration.");
+    }
+
     supabaseUrl = new URL(CONFIG.supabaseUrl);
 
     if (
@@ -173,31 +170,30 @@ export default async function handler(req, res) {
       supabaseUrl.search ||
       supabaseUrl.hash
     ) {
-      throw new Error("Invalid Supabase URL");
+      throw new Error("Invalid Supabase URL.");
     }
   } catch {
     return res.status(503).json({
-      error: "Supabase configuration is invalid.",
+      error: "Authentication configuration is invalid.",
     });
   }
 
-  if (!CONFIG.supabaseAnonKey || !CONFIG.openaiKey || !CONFIG.model) {
-    return res.status(503).json({
-      error: "Chat service is not configured.",
-    });
-  }
-
+  // Require an authenticated user.
   const authorization = req.headers.authorization || "";
-  const match = authorization.match(/^Bearer\s+(\S+)$/i);
+  const tokenMatch = authorization.match(
+    /^Bearer\s+(\S+)$/i
+  );
 
-  if (!match) {
+  if (!tokenMatch) {
     return res.status(401).json({
-      error: "Please sign in again.",
+      error: "Please sign in to test prompts.",
     });
   }
 
   try {
-    const authenticated = await authenticateUser(match[1]);
+    const authenticated = await authenticateUser(
+      tokenMatch[1]
+    );
 
     if (!authenticated) {
       return res.status(401).json({
@@ -205,13 +201,14 @@ export default async function handler(req, res) {
       });
     }
   } catch (error) {
-    return res.status(
-      error.name === "AbortError" ? 504 : 503
-    ).json({
-      error: "Unable to verify your session. Please try again.",
-    });
+    return res
+      .status(error.name === "AbortError" ? 504 : 503)
+      .json({
+        error: "Unable to verify your session.",
+      });
   }
 
+  // Validate the incoming request.
   let messages;
 
   try {
@@ -222,100 +219,77 @@ export default async function handler(req, res) {
     });
   }
 
-  // Inspect first. If inspection fails, never call OpenAI.
+  // Test only the latest user-submitted prompt.
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (!latestUserMessage) {
+    return res.status(400).json({
+      error: "Enter a prompt to test.",
+    });
+  }
+
+  const prompt = latestUserMessage.content.trim();
+
+  if (prompt.length > FIREWALL_MAX_CHARS) {
+    return res.status(400).json({
+      error: "Prompts must be 12,000 characters or fewer.",
+    });
+  }
+
+  // Send the prompt to the real firewall endpoint.
   let security;
 
   try {
-    security = await inspectWithFirewall(messages);
-  } catch {
-    return res.status(503).json({
-      error:
-        "Firewall inspection is unavailable. The prompt was not sent to the AI provider.",
-      security: {
-        decision: "BLOCK",
-        source: "Firewall unavailable",
-        modelCalled: false,
-      },
-    });
+    security = await inspectPrompt(prompt);
+  } catch (error) {
+    const timedOut = error.name === "AbortError";
+
+    return res
+      .status(timedOut ? 504 : 503)
+      .json({
+        status: "unavailable",
+        error: timedOut
+          ? "Firewall inspection timed out. Please retry."
+          : "AI Firewall Lab is unavailable. No result was fabricated.",
+        security: {
+          decision: "UNAVAILABLE",
+          source: "AI Firewall Lab",
+          modelCalled: false,
+          actionExecuted: false,
+        },
+      });
   }
 
-  const reasons = Array.isArray(security.reasons)
-    ? security.reasons
-    : [];
+  // Build dashboard data using the lab's actual response.
+  const reasons = security.reasons;
 
-  const verdict = {
+  const details = reasons.length
+    ? reasons.join("; ")
+    : "No rule matches were reported by the lab.";
+
+  const dashboardResult = {
     decision: security.decision,
     score: security.score,
     reasons,
-    source: security.source || "AI Firewall Lab",
+    source: security.source,
     modelCalled: false,
+    actionExecuted: false,
   };
 
-  // REVIEW and BLOCK both stop execution.
-  if (security.decision !== "ALLOW") {
-    const details = reasons.length
-      ? reasons.join("; ")
-      : "Manual review is required.";
-
-    return res.status(200).json({
-      status:
-        security.decision === "BLOCK" ? "blocked" : "review",
-      security: verdict,
-      reply:
-        `Firewall verdict: ${security.decision}\n` +
-        `Risk score: ${security.score ?? "Unavailable"}\n` +
-        `Reasons: ${details}\n\n` +
-        "The AI provider was not called.",
-    });
-  }
-
-  try {
-    const reply = await callOpenAI(messages);
-
-    verdict.modelCalled = true;
-
-    return res.status(200).json({
-      status: "success",
-      model: CONFIG.model,
-      security: verdict,
-      reply:
-        `Security verdict: ALLOW\n` +
-        `Risk score: ${security.score ?? "Unavailable"}\n` +
-        `Inspected by: AI Firewall Lab\n\n` +
-        reply,
-    });
-  } catch (error) {
-    if (error.name === "AbortError") {
-      return res.status(504).json({
-        error: "The AI took too long to respond. Try again.",
-        security: verdict,
-      });
-    }
-
-    if (error.status === 429) {
-      return res.status(429).json({
-        error: "API quota or rate limit reached.",
-        security: verdict,
-      });
-    }
-
-    if (error.status === 401 || error.status === 403) {
-      return res.status(502).json({
-        error: "The AI provider rejected the server API key.",
-        security: verdict,
-      });
-    }
-
-    if (error.status === 400) {
-      return res.status(502).json({
-        error: "The AI provider rejected the request or model.",
-        security: verdict,
-      });
-    }
-
-    return res.status(502).json({
-      error: "The AI service is temporarily unavailable.",
-      security: verdict,
-    });
-  }
+  // Return the result. No model or executor is invoked.
+  return res.status(200).json({
+    status: "tested",
+    security: dashboardResult,
+    reply: [
+      `Firewall verdict: ${security.decision}`,
+      `Risk score: ${security.score}/100`,
+      `Inspected by: ${security.source}`,
+      "AI model called: No",
+      "Real action executed: No",
+      "",
+      `Matched rules / details: ${details}`,
+    ].join("\n"),
+  });
 }
