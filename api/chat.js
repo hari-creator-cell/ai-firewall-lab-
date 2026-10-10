@@ -1,26 +1,80 @@
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_PROMPT_LENGTH = 8000;
-const REQUEST_TIMEOUT_MS = 15000;
+const LAB_TIMEOUT_MS = 15000;
+const GEMINI_TIMEOUT_MS = 30000;
 
-const json = (res, status, data) => {
-  res.status(status).setHeader("Content-Type", "application/json; charset=utf-8");
+function json(res, status, data) {
   res.setHeader("Cache-Control", "no-store");
-  return res.json(data);
-};
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  return res.status(status).json(data);
+}
 
-function getText(value) {
+function extractText(value) {
   if (typeof value === "string") return value;
-  if (value && typeof value === "object") {
-    for (const key of ["text", "prompt", "message", "content"]) {
-      if (typeof value[key] === "string") return value[key];
-    }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part.text === "string") return part.text;
+        if (part && typeof part.content === "string") return part.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
   }
+
+  if (!value || typeof value !== "object") return "";
+
+  for (const key of ["text", "prompt", "message", "content"]) {
+    if (typeof value[key] === "string") return value[key];
+  }
+
+  if (Array.isArray(value.parts)) {
+    return extractText(value.parts);
+  }
+
   return "";
 }
 
-function normalizeDecision(result) {
+function getPrompt(body) {
+  // Common simple chat request formats.
+  const direct = extractText(body);
+  if (direct.trim()) return direct.trim();
+
+  // OpenAI-style messages array: use the latest user message.
+  if (Array.isArray(body.messages)) {
+    for (let i = body.messages.length - 1; i >= 0; i--) {
+      const item = body.messages[i];
+
+      if (
+        item &&
+        typeof item === "object" &&
+        (!item.role || item.role === "user")
+      ) {
+        const value = extractText(item);
+        if (value.trim()) return value.trim();
+      }
+    }
+  }
+
+  // Some frontends use input or conversation arrays.
+  if (typeof body.input === "string") return body.input.trim();
+
+  if (Array.isArray(body.conversation)) {
+    for (let i = body.conversation.length - 1; i >= 0; i--) {
+      const value = extractText(body.conversation[i]);
+      if (value.trim()) return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function getDecision(result) {
   const raw = result?.decision ?? result?.verdict ?? result?.status;
+
   if (typeof raw !== "string") return null;
 
   const value = raw.trim().toUpperCase().replace(/[\s-]+/g, "_");
@@ -29,16 +83,14 @@ function normalizeDecision(result) {
     return "ALLOW";
   }
 
-  if (
-    ["DENY", "DENIED", "BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(value)
-  ) {
+  if (["DENY", "DENIED", "BLOCK", "BLOCKED", "REJECTED"].includes(value)) {
     return "DENY";
   }
 
   return null;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs) {
+async function fetchTimed(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -61,18 +113,52 @@ export default async function handler(req, res) {
     return json(res, 405, { error: "Method not allowed." });
   }
 
-  const labBase = process.env.LAB_URL?.trim()?.replace(/\/+$/, "");
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  const declaredLength = Number(req.headers["content-length"] || 0);
 
-  // Never accept a client-provided URL for the firewall or AI provider.
-  if (!labBase || !geminiKey) {
+  if (declaredLength > MAX_BODY_BYTES) {
+    return json(res, 413, { error: "Request is too large." });
+  }
+
+  let body = req.body;
+
+  if (typeof body === "string") {
+    if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
+      return json(res, 413, { error: "Request is too large." });
+    }
+
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return json(res, 400, { error: "Invalid JSON." });
+    }
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return json(res, 400, { error: "Invalid request body." });
+  }
+
+  const prompt = getPrompt(body);
+
+  if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
+    return json(res, 400, {
+      error: "Provide a prompt of 1–8000 characters.",
+      code: "INVALID_PROMPT",
+    });
+  }
+
+  const labBase = process.env.LAB_URL?.trim()?.replace(/\/+$/, "");
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const model = process.env.GEMINI_MODEL?.trim();
+
+  if (!labBase || !apiKey || !model) {
     console.error("Chat configuration missing:", {
       labUrl: !labBase,
-      geminiKey: !geminiKey,
+      geminiApiKey: !apiKey,
+      geminiModel: !model,
     });
 
     return json(res, 503, {
-      error: "Chat service is not configured.",
+      error: "Chat service configuration is incomplete.",
       code: "CONFIGURATION_ERROR",
     });
   }
@@ -98,46 +184,12 @@ export default async function handler(req, res) {
     });
   }
 
-  // Limit payload size before parsing.
-  const declaredLength = Number(req.headers["content-length"] || 0);
-
-  if (declaredLength > MAX_BODY_BYTES) {
-    return json(res, 413, { error: "Request is too large." });
-  }
-
-  let body = req.body;
-
-  if (typeof body === "string") {
-    if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
-      return json(res, 413, { error: "Request is too large." });
-    }
-
-    try {
-      body = JSON.parse(body);
-    } catch {
-      return json(res, 400, { error: "Invalid JSON." });
-    }
-  }
-
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return json(res, 400, { error: "Invalid request body." });
-  }
-
-  const prompt = getText(body).trim();
-
-  if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
-    return json(res, 400, {
-      error: "Provide a prompt of 1–8000 characters.",
-    });
-  }
-
-  // Ignore client-supplied decisions, trust labels, and destination URLs.
   const requestId = crypto.randomUUID();
-
   let inspection;
 
+  // Inspect with the firewall BEFORE calling Gemini.
   try {
-    const labResponse = await fetchWithTimeout(
+    const response = await fetchTimed(
       new URL("/api/inspect", labUrl).toString(),
       {
         method: "POST",
@@ -151,12 +203,12 @@ export default async function handler(req, res) {
           sourceApp: "Nova AI",
         }),
       },
-      REQUEST_TIMEOUT_MS
+      LAB_TIMEOUT_MS
     );
 
-    if (!labResponse.ok) {
-      console.error("Firewall inspection failed:", {
-        status: labResponse.status,
+    if (!response.ok) {
+      console.error("Lab inspection returned non-success status:", {
+        status: response.status,
         requestId,
       });
 
@@ -167,17 +219,17 @@ export default async function handler(req, res) {
       });
     }
 
-    const contentType = labResponse.headers.get("content-type") || "";
+    const contentType = response.headers.get("content-type") || "";
 
-    if (!contentType.includes("application/json")) {
-      throw new Error("Unexpected firewall response type");
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw new Error("Lab returned a non-JSON response");
     }
 
-    inspection = await labResponse.json();
+    inspection = await response.json();
   } catch (error) {
-    console.error("Firewall inspection error:", {
+    console.error("Lab inspection failed:", {
       requestId,
-      name: error?.name || "Error",
+      errorName: error?.name || "Error",
     });
 
     return json(res, 503, {
@@ -187,15 +239,15 @@ export default async function handler(req, res) {
     });
   }
 
-  const decision = normalizeDecision(inspection);
+  const decision = getDecision(inspection);
 
-  // Fail closed: an unknown or missing verdict never permits an AI call.
+  // Unknown or missing decisions are never treated as permission.
   if (decision !== "ALLOW") {
     return json(res, decision === "DENY" ? 403 : 503, {
       error:
         decision === "DENY"
           ? "The AI Firewall Lab denied this request."
-          : "The firewall returned no recognized authorization verdict.",
+          : "The Lab returned no recognized authorization verdict.",
       code:
         decision === "DENY"
           ? "FIREWALL_DENIED"
@@ -203,36 +255,23 @@ export default async function handler(req, res) {
       requestId,
       firewall: {
         decision: decision || "UNKNOWN",
-        riskScore:
-          Number.isFinite(inspection?.riskScore)
-            ? inspection.riskScore
-            : undefined,
       },
     });
   }
 
-  // Configure a currently supported Gemini model in Vercel.
-  // Do not hard-code a model ID that may be unavailable to your account.
-  const model = (process.env.GEMINI_MODEL || "").trim();
-
-  if (!model || !/^[a-zA-Z0-9._-]+$/.test(model)) {
-    return json(res, 503, {
-      error: "Gemini model configuration is missing or invalid.",
-      code: "MODEL_CONFIGURATION_ERROR",
-      requestId,
-    });
-  }
-
-  let geminiResponse;
+  // Call Gemini only after the explicit firewall allow verdict.
+  let response;
 
   try {
-    geminiResponse = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    response = await fetchTimed(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model
+      )}:generateContent`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": geminiKey,
+          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
           contents: [
@@ -247,12 +286,12 @@ export default async function handler(req, res) {
           },
         }),
       },
-      30000
+      GEMINI_TIMEOUT_MS
     );
   } catch (error) {
     console.error("Gemini request failed:", {
       requestId,
-      name: error?.name || "Error",
+      errorName: error?.name || "Error",
     });
 
     return json(res, 502, {
@@ -262,19 +301,16 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!geminiResponse.ok) {
-    // Avoid logging API keys or raw provider response bodies.
-    console.error("Gemini returned an error:", {
-      requestId,
-      status: geminiResponse.status,
+  if (!response.ok) {
+    console.error("Gemini returned non-success status:", {
+      status: response.status,
       model,
+      requestId,
     });
 
     return json(
       res,
-      geminiResponse.status === 429 || geminiResponse.status >= 500
-        ? 503
-        : 502,
+      response.status === 429 || response.status >= 500 ? 503 : 502,
       {
         error: "The AI provider could not complete the request.",
         code: "AI_PROVIDER_ERROR",
@@ -286,10 +322,10 @@ export default async function handler(req, res) {
   let generated;
 
   try {
-    generated = await geminiResponse.json();
+    generated = await response.json();
   } catch {
     return json(res, 502, {
-      error: "The AI provider returned an invalid response.",
+      error: "The AI provider returned invalid JSON.",
       code: "INVALID_AI_RESPONSE",
       requestId,
     });
