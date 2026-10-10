@@ -1,8 +1,7 @@
 const CONFIG = {
-  // These names must match the Environment Variables in Vercel.
-  url: process.env.SUPABASE_URL,
+  url: process.env.supabase_url,
   anonKey: process.env.supabase_anon_key,
-  serviceKey: process.env.supabase_service_role_key,
+  serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   geminiKey: process.env.GEMINI_API_KEY,
   model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
 };
@@ -10,6 +9,7 @@ const CONFIG = {
 const MAX_MESSAGES = 30;
 const MAX_MESSAGE_LENGTH = 12000;
 const MAX_TOTAL_LENGTH = 30000;
+const REQUEST_TIMEOUT_MS = 45000;
 
 function sendJson(res, status, body) {
   return res.status(status).json(body);
@@ -17,9 +17,9 @@ function sendJson(res, status, body) {
 
 function getMissingConfig() {
   const required = {
-    SUPABASE_URL: CONFIG.url,
+    supabase_url: CONFIG.url,
     supabase_anon_key: CONFIG.anonKey,
-    supabase_service_role_key: CONFIG.serviceKey,
+    SUPABASE_SERVICE_ROLE_KEY: CONFIG.serviceKey,
     GEMINI_API_KEY: CONFIG.geminiKey,
   };
 
@@ -49,10 +49,11 @@ function validateMessages(messages) {
     if (
       !message ||
       typeof message !== "object" ||
+      Array.isArray(message) ||
       !["user", "assistant"].includes(message.role) ||
       typeof message.content !== "string"
     ) {
-      return "Each message must have a valid role and string content.";
+      return "Each message must contain a valid role and string content.";
     }
 
     if (message.content.length > MAX_MESSAGE_LENGTH) {
@@ -70,15 +71,14 @@ function validateMessages(messages) {
 }
 
 function toGeminiContents(messages) {
-  // Gemini expects user/model roles and alternating conversational turns.
   const contents = [];
 
   for (const message of messages) {
-    const role = message.role === "assistant" ? "model" : "user";
     const text = message.content.trim();
 
     if (!text) continue;
 
+    const role = message.role === "assistant" ? "model" : "user";
     const last = contents[contents.length - 1];
 
     if (last && last.role === role) {
@@ -91,7 +91,7 @@ function toGeminiContents(messages) {
     }
   }
 
-  // Gemini conversations must start with a user message.
+  // Gemini conversation history must begin with a user message.
   while (contents.length && contents[0].role !== "user") {
     contents.shift();
   }
@@ -100,24 +100,31 @@ function toGeminiContents(messages) {
 }
 
 async function authenticateUser(token) {
-  const response = await fetch(`${CONFIG.url.replace(/\/+$/, "")}/auth/v1/user`, {
+  const baseUrl = CONFIG.url.replace(/\/+$/, "");
+
+  const response = await fetch(`${baseUrl}/auth/v1/user`, {
     method: "GET",
     headers: {
       apikey: CONFIG.anonKey,
       Authorization: `Bearer ${token}`,
     },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
-  if (!response.ok) return null;
+  if (!response.ok) {
+    return null;
+  }
 
   const user = await response.json();
 
-  if (!user || typeof user.id !== "string") return null;
+  if (!user || typeof user.id !== "string") {
+    return null;
+  }
 
   return user;
 }
 
-async function callGemini(messages) {
+async function callGemini(contents) {
   const endpoint =
     "https://generativelanguage.googleapis.com/v1beta/models/" +
     encodeURIComponent(CONFIG.model) +
@@ -130,13 +137,13 @@ async function callGemini(messages) {
       "x-goog-api-key": CONFIG.geminiKey,
     },
     body: JSON.stringify({
-      contents: messages,
+      contents,
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 2048,
       },
     }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -148,6 +155,7 @@ async function callGemini(messages) {
       typeof data?.error?.message === "string"
         ? data.error.message
         : "The AI provider returned an error.";
+
     throw error;
   }
 
@@ -167,12 +175,12 @@ async function callGemini(messages) {
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
+
     return sendJson(res, 405, {
       error: "Method not allowed. Use POST.",
     });
   }
 
-  // Do not expose internal configuration or secrets in responses.
   const missing = getMissingConfig();
 
   if (missing.length > 0) {
@@ -181,7 +189,16 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 503, {
       error: "Server configuration incomplete.",
       missing,
-      hint: "Check the Environment Variables configured for this Vercel deployment.",
+      hint: "Check that these environment variables exist in the Vercel Production environment.",
+    });
+  }
+
+  if (
+    typeof CONFIG.url !== "string" ||
+    !/^https:\/\/[^/]+/i.test(CONFIG.url)
+  ) {
+    return sendJson(res, 503, {
+      error: "The Supabase URL configuration is invalid.",
     });
   }
 
@@ -198,7 +215,10 @@ module.exports = async function handler(req, res) {
   try {
     user = await authenticateUser(token);
   } catch (error) {
-    console.error("Supabase authentication request failed:", error.message);
+    console.error("Supabase authentication request failed:", {
+      name: error.name,
+      message: error.message,
+    });
 
     return sendJson(res, 502, {
       error: "Could not verify your session. Please try again.",
@@ -229,10 +249,7 @@ module.exports = async function handler(req, res) {
 
   const contents = toGeminiContents(body.messages);
 
-  if (
-    contents.length === 0 ||
-    contents[0].role !== "user"
-  ) {
+  if (!contents.length || contents[0].role !== "user") {
     return sendJson(res, 400, {
       error: "Provide at least one non-empty user message.",
     });
@@ -249,10 +266,14 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     console.error("Chat provider request failed:", {
       status: error.status || null,
+      name: error.name || null,
       message: error.providerMessage || error.message,
     });
 
-    if (error.name === "TimeoutError" || error.name === "AbortError") {
+    if (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError"
+    ) {
       return sendJson(res, 504, {
         error: "The AI provider took too long to respond. Please try again.",
       });
