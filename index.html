@@ -34,7 +34,7 @@
 
     button, input, textarea { font: inherit; }
     button { cursor: pointer; }
-
+    button:disabled { opacity: .55; cursor: wait; }
     .hidden { display: none !important; }
 
     .auth-screen {
@@ -71,7 +71,6 @@
 
     h1 { font-size: 27px; margin: 17px 0 6px; }
     .subtitle { color: var(--muted); margin: 0 0 24px; line-height: 1.5; }
-
     .field { margin-bottom: 15px; }
 
     .field label {
@@ -110,8 +109,6 @@
     }
 
     .primary:hover { filter: brightness(1.12); }
-    .primary:disabled { opacity: .55; cursor: wait; }
-
     .full { width: 100%; }
 
     .switch-text {
@@ -221,7 +218,7 @@
     }
 
     .topbar {
-      height: 64px;
+      min-height: 64px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -249,9 +246,17 @@
       padding-top: 35px;
     }
 
-    .welcome .logo { margin: 0 auto 18px; width: 58px; height: 58px; }
+    .welcome .logo {
+      margin: 0 auto 18px;
+      width: 58px;
+      height: 58px;
+    }
 
-    .welcome h2 { font-size: clamp(25px, 4vw, 36px); margin: 0 0 10px; }
+    .welcome h2 {
+      font-size: clamp(25px, 4vw, 36px);
+      margin: 0 0 10px;
+    }
+
     .welcome p { color: var(--muted); margin: 0; }
 
     .suggestions {
@@ -372,7 +377,9 @@
     <div class="auth-card">
       <div class="logo">✦</div>
       <h1 id="authTitle">Welcome to Nova</h1>
-      <p class="subtitle" id="authSubtitle">Sign in to start your AI conversation.</p>
+      <p class="subtitle" id="authSubtitle">
+        Sign in to start your AI conversation.
+      </p>
 
       <form id="authForm">
         <div class="field">
@@ -383,16 +390,22 @@
 
         <div class="field">
           <label for="password">Password</label>
-          <input id="password" type="password" autocomplete="current-password"
-                 minlength="6" required placeholder="At least 6 characters">
+          <input id="password" type="password"
+                 autocomplete="current-password"
+                 minlength="6" required
+                 placeholder="At least 6 characters">
         </div>
 
-        <button id="authSubmit" class="primary full" type="submit">Sign In</button>
+        <button id="authSubmit" class="primary full" type="submit">
+          Sign In
+        </button>
       </form>
 
       <p class="switch-text">
         <span id="switchLabel">New to Nova?</span>
-        <button id="switchMode" class="text-button" type="button">Create account</button>
+        <button id="switchMode" class="text-button" type="button">
+          Create account
+        </button>
       </p>
 
       <div id="authNotice" class="notice hidden" role="status"></div>
@@ -406,16 +419,21 @@
         <span>Nova AI</span>
       </div>
 
-      <button id="newChatButton" class="new-chat">＋ &nbsp; New conversation</button>
+      <button id="newChatButton" class="new-chat">
+        ＋ &nbsp; New conversation
+      </button>
 
       <div class="sidebar-label">Your workspace</div>
+
       <div class="sidebar-info">
         Ask questions, brainstorm ideas, learn concepts, or get help with coding.
       </div>
 
       <div class="account">
         <p id="accountEmail" class="account-email"></p>
-        <button id="signOutButton" class="secondary full">Sign out</button>
+        <button id="signOutButton" class="secondary full" type="button">
+          Sign out
+        </button>
       </div>
     </aside>
 
@@ -433,10 +451,18 @@
         </div>
 
         <div id="suggestions" class="suggestions">
-          <button class="suggestion" type="button">Explain artificial intelligence simply</button>
-          <button class="suggestion" type="button">Help me build a website</button>
-          <button class="suggestion" type="button">Create a study plan for college</button>
-          <button class="suggestion" type="button">Help me debug my code</button>
+          <button class="suggestion" type="button">
+            Explain artificial intelligence simply
+          </button>
+          <button class="suggestion" type="button">
+            Help me build a website
+          </button>
+          <button class="suggestion" type="button">
+            Create a study plan for college
+          </button>
+          <button class="suggestion" type="button">
+            Help me debug my code
+          </button>
         </div>
 
         <div id="messages" class="messages" aria-live="polite"></div>
@@ -446,10 +472,14 @@
             <textarea id="messageInput" rows="1" maxlength="10000"
               aria-label="Your message"
               placeholder="Message Nova…"></textarea>
+
             <button id="sendButton" class="send-button" type="submit"
               aria-label="Send message">↑</button>
           </div>
-          <p class="footnote">AI can make mistakes. Check important information.</p>
+
+          <p class="footnote">
+            AI can make mistakes. Check important information.
+          </p>
         </form>
       </div>
     </main>
@@ -458,16 +488,13 @@
   <script>
     "use strict";
 
-    // Supabase project configuration.
-    const SUPABASE_URL = "https://uotkikyplykrscqzrsfj.supabase.co";
+    // Public Supabase project settings.
+    // Never put the service-role key or Gemini API key in this file.
+    const SUPABASE_URL =
+      "https://uotkikyplykrscqzrsfj.supabase.co";
+
     const SUPABASE_PUBLISHABLE_KEY =
       "sb_publishable_wtn1LJL6nKItxTOIbNBVYA_mza7UhT0";
-
-    const supabaseReady =
-      SUPABASE_URL.startsWith("https://") &&
-      !SUPABASE_URL.includes("YOUR_") &&
-      SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_") &&
-      !SUPABASE_PUBLISHABLE_KEY.includes("YOUR_");
 
     const authScreen = document.getElementById("authScreen");
     const appScreen = document.getElementById("appScreen");
@@ -526,11 +553,13 @@
         document.getElementById("password").autocomplete = "new-password";
       } else {
         authTitle.textContent = "Welcome to Nova";
-        authSubtitle.textContent = "Sign in to start your AI conversation.";
+        authSubtitle.textContent =
+          "Sign in to start your AI conversation.";
         authSubmit.textContent = "Sign In";
         switchLabel.textContent = "New to Nova?";
         switchMode.textContent = "Create account";
-        document.getElementById("password").autocomplete = "current-password";
+        document.getElementById("password").autocomplete =
+          "current-password";
       }
     }
 
@@ -540,17 +569,25 @@
     });
 
     async function initialize() {
-      if (!supabaseReady) {
-        connectionStatus.textContent = "Configuration required";
+      if (
+        !SUPABASE_URL.startsWith("https://") ||
+        SUPABASE_URL.includes("YOUR_") ||
+        !SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_") ||
+        SUPABASE_PUBLISHABLE_KEY.includes("YOUR_")
+      ) {
         showAuth();
-        showNotice(authNotice, "Supabase configuration is incomplete.");
+        showNotice(authNotice, "Supabase configuration is incomplete.", "error");
         authSubmit.disabled = true;
         return;
       }
 
       if (!window.supabase || !window.supabase.createClient) {
         showAuth();
-        showNotice(authNotice, "Supabase library failed to load. Check your internet connection.");
+        showNotice(
+          authNotice,
+          "Supabase library failed to load. Check your internet connection.",
+          "error"
+        );
         return;
       }
 
@@ -604,7 +641,9 @@
       const password = document.getElementById("password").value;
 
       authSubmit.disabled = true;
-      authSubmit.textContent = isSignUp ? "Creating account…" : "Signing in…";
+      authSubmit.textContent = isSignUp
+        ? "Creating account…"
+        : "Signing in…";
 
       try {
         if (isSignUp) {
@@ -626,33 +665,45 @@
           }
         } else {
           const { data, error } =
-            await supabaseClient.auth.signInWithPassword({ email, password });
+            await supabaseClient.auth.signInWithPassword({
+              email,
+              password
+            });
 
           if (error) throw error;
-
           showApp(data.user);
         }
       } catch (error) {
-        showNotice(authNotice, error.message || "Authentication failed.", "error");
+        showNotice(
+          authNotice,
+          error.message || "Authentication failed.",
+          "error"
+        );
       } finally {
         authSubmit.disabled = false;
-        authSubmit.textContent = isSignUp ? "Create Account" : "Sign In";
+        authSubmit.textContent = isSignUp
+          ? "Create Account"
+          : "Sign In";
       }
     });
 
-    document.getElementById("signOutButton").addEventListener("click", async () => {
-      if (!supabaseClient) return;
+    document.getElementById("signOutButton").addEventListener(
+      "click",
+      async () => {
+        if (!supabaseClient) return;
 
-      const { error } = await supabaseClient.auth.signOut();
+        const { error } = await supabaseClient.auth.signOut();
 
-      if (error) {
-        connectionStatus.textContent = "Sign-out failed";
-        return;
+        if (error) {
+          connectionStatus.textContent = "Sign-out failed";
+          return;
+        }
+
+        messages.replaceChildren();
+        resetChat();
+        showAuth();
       }
-
-      messages.replaceChildren();
-      showAuth();
-    });
+    );
 
     function addMessage(role, content) {
       welcome.classList.add("hidden");
@@ -684,7 +735,10 @@
       messageInput.focus();
     }
 
-    document.getElementById("newChatButton").addEventListener("click", resetChat);
+    document.getElementById("newChatButton").addEventListener(
+      "click",
+      resetChat
+    );
 
     suggestions.addEventListener("click", (event) => {
       const button = event.target.closest("button");
@@ -717,23 +771,76 @@
       if (!message) return;
 
       if (!supabaseClient) {
-        addMessage("assistant", "Supabase is not configured. Please check the setup.");
+        addMessage(
+          "assistant",
+          "Supabase is not configured. Please check the setup."
+        );
         return;
       }
 
-      const { data: sessionData, error: sessionError } =
-        await supabaseClient.auth.getSession();
+      let sessionData;
 
-      if (sessionError || !sessionData.session) {
+      try {
+        const { data, error } =
+          await supabaseClient.auth.getSession();
+
+        if (error) throw error;
+        sessionData = data;
+      } catch (error) {
+        addMessage(
+          "assistant",
+          "Unable to check your login session. Please sign in again."
+        );
+        return;
+      }
+
+      if (!sessionData.session) {
         showAuth();
-        showNotice(authNotice, "Your session expired. Please sign in again.", "error");
+        showNotice(
+          authNotice,
+          "Your session expired. Please sign in again.",
+          "error"
+        );
         return;
       }
+
+      // Include prior messages so Nova can use the current conversation.
+      // Only send the role/content fields expected by the backend.
+      const conversationMessages = [];
+
+      for (const element of messages.querySelectorAll(".message")) {
+        const role = element.classList.contains("user")
+          ? "user"
+          : element.classList.contains("assistant")
+            ? "assistant"
+            : null;
+
+        const body = element.querySelector(
+          ".message-role + div"
+        );
+
+        if (!role || !body) continue;
+
+        const content = body.textContent.trim();
+
+        // Do not send the temporary "Thinking…" placeholder.
+        if (!content || content === "Thinking…") continue;
+
+        conversationMessages.push({ role, content });
+      }
+
+      conversationMessages.push({
+        role: "user",
+        content: message
+      });
+
+      // Limit conversation size to avoid unnecessarily large requests.
+      const recentMessages = conversationMessages.slice(-20);
 
       messageInput.value = "";
       messageInput.style.height = "auto";
-      addMessage("user", message);
 
+      addMessage("user", message);
       const response = addMessage("assistant", "Thinking…");
 
       sending = true;
@@ -745,17 +852,22 @@
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + sessionData.session.access_token
+            "Authorization":
+              "Bearer " + sessionData.session.access_token
           },
-          body: JSON.stringify({ message })
+          // FIX: The backend expects { messages: [...] }, not { message }.
+          body: JSON.stringify({
+            messages: recentMessages
+          })
         });
 
         const result = await responseFromServer.json().catch(() => ({}));
 
         if (!responseFromServer.ok) {
           throw new Error(
-            result.error || "Chat request failed with status " +
-            responseFromServer.status
+            result.error ||
+            "Chat request failed with status " +
+              responseFromServer.status
           );
         }
 
@@ -765,15 +877,20 @@
           null;
 
         if (!answer) {
-          throw new Error("The backend returned no reply. Check the /api/chat implementation.");
+          throw new Error(
+            "The backend returned no reply. Check the /api/chat implementation."
+          );
         }
 
         response.body.textContent = answer;
       } catch (error) {
+        const errorMessage = error.message || "Unknown error";
+
         response.body.textContent =
           "I couldn't get a response from the backend.\n\n" +
-          (error.message || "Unknown error") +
-          "\n\nCheck that the /api/chat backend is deployed and its environment variables are configured.";
+          errorMessage;
+
+        console.error("Nova chat request failed:", error);
       } finally {
         sending = false;
         sendButton.disabled = false;
@@ -786,7 +903,8 @@
       showAuth();
       showNotice(
         authNotice,
-        "Initialization failed: " + (error.message || "Unknown error"),
+        "Initialization failed: " +
+          (error.message || "Unknown error"),
         "error"
       );
     });
