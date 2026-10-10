@@ -1,295 +1,319 @@
 
-const CONFIG = {
-  supabaseUrl: process.env.supabase_url,
-  supabaseAnonKey: process.env.supabase_anon_key,
-  firewallUrl:
-    "https://ai-firewall-lab-hackathon.vercel.app/api/inspect",
+const MAX_BODY_BYTES = 32 * 1024;
+const MAX_PROMPT_LENGTH = 8000;
+const REQUEST_TIMEOUT_MS = 15000;
+
+const json = (res, status, data) => {
+  res.status(status).setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  return res.json(data);
 };
 
-const MAX_MESSAGES = 30;
-const MAX_MESSAGE_LENGTH = 12000;
-const MAX_TOTAL_LENGTH = 30000;
-const FIREWALL_MAX_CHARS = 12000;
-const REQUEST_TIMEOUT_MS = 10000;
+function getText(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    for (const key of ["text", "prompt", "message", "content"]) {
+      if (typeof value[key] === "string") return value[key];
+    }
+  }
+  return "";
+}
 
-/**
- * Validate chat history received from the frontend.
- */
-function validateMessages(messages) {
+function normalizeDecision(result) {
+  const raw = result?.decision ?? result?.verdict ?? result?.status;
+  if (typeof raw !== "string") return null;
+
+  const value = raw.trim().toUpperCase().replace(/[\s-]+/g, "_");
+
+  if (["ALLOW", "ALLOWED", "APPROVE", "APPROVED"].includes(value)) {
+    return "ALLOW";
+  }
+
   if (
-    !Array.isArray(messages) ||
-    messages.length === 0 ||
-    messages.length > MAX_MESSAGES
+    ["DENY", "DENIED", "BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(value)
   ) {
-    throw new Error("Invalid message list.");
+    return "DENY";
   }
 
-  let totalLength = 0;
-
-  for (const message of messages) {
-    if (
-      !message ||
-      !["user", "assistant"].includes(message.role) ||
-      typeof message.content !== "string" ||
-      !message.content.trim() ||
-      message.content.length > MAX_MESSAGE_LENGTH
-    ) {
-      throw new Error("Invalid message.");
-    }
-
-    totalLength += message.content.length;
-  }
-
-  if (totalLength > MAX_TOTAL_LENGTH) {
-    throw new Error("Message history is too large.");
-  }
-
-  return messages;
+  return null;
 }
 
-/**
- * Verify the user's Supabase access token.
- */
-async function authenticateUser(token) {
+async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
-
-  const timeout = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(
-      `${CONFIG.supabaseUrl}/auth/v1/user`,
-      {
-        method: "GET",
-        headers: {
-          apikey: CONFIG.supabaseAnonKey,
-          Authorization: `Bearer ${token}`,
-        },
-        signal: controller.signal,
-      }
-    );
-
-    if (!response.ok) {
-      return false;
-    }
-
-    const user = await response.json();
-
-    return Boolean(user && user.id);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-/**
- * Send a prompt to AI Firewall Lab.
- * No AI provider or tool executor is called here.
- */
-async function inspectPrompt(prompt) {
-  const controller = new AbortController();
-
-  const timeout = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
-
-  try {
-    const response = await fetch(CONFIG.firewallUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        text: prompt,
-      }),
+    return await fetch(url, {
+      ...options,
       signal: controller.signal,
+      redirect: "error",
     });
-
-    const result = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error("Firewall request failed.");
-    }
-
-    if (
-      !result ||
-      !["ALLOW", "REVIEW", "BLOCK"].includes(result.decision) ||
-      typeof result.score !== "number" ||
-      !Array.isArray(result.reasons)
-    ) {
-      throw new Error("Invalid firewall response.");
-    }
-
-    return {
-      decision: result.decision,
-      score: result.score,
-      reasons: result.reasons.filter(
-        (reason) => typeof reason === "string"
-      ),
-      source: result.source || "AI Firewall Lab",
-    };
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }
 
-/**
- * Vercel serverless API endpoint.
- */
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
+    return json(res, 405, { error: "Method not allowed." });
+  }
 
-    return res.status(405).json({
-      error: "Method not allowed.",
+  const labBase = process.env.LAB_URL?.trim()?.replace(/\/+$/, "");
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+
+  // Never accept a client-provided URL for the firewall or AI provider.
+  if (!labBase || !geminiKey) {
+    console.error("Chat configuration missing:", {
+      labUrl: !labBase,
+      geminiKey: !geminiKey,
+    });
+
+    return json(res, 503, {
+      error: "Chat service is not configured.",
+      code: "CONFIGURATION_ERROR",
     });
   }
 
-  // Check server configuration.
-  let supabaseUrl;
+  let labUrl;
 
   try {
-    if (
-      !CONFIG.supabaseUrl ||
-      !CONFIG.supabaseAnonKey
-    ) {
-      throw new Error("Missing configuration.");
-    }
-
-    supabaseUrl = new URL(CONFIG.supabaseUrl);
+    labUrl = new URL(labBase);
 
     if (
-      supabaseUrl.protocol !== "https:" ||
-      !supabaseUrl.hostname.endsWith(".supabase.co") ||
-      supabaseUrl.pathname !== "/" ||
-      supabaseUrl.search ||
-      supabaseUrl.hash
+      labUrl.protocol !== "https:" ||
+      labUrl.username ||
+      labUrl.password ||
+      labUrl.search ||
+      labUrl.hash
     ) {
-      throw new Error("Invalid Supabase URL.");
+      throw new Error("Invalid Lab URL");
     }
   } catch {
-    return res.status(503).json({
-      error: "Authentication configuration is invalid.",
+    return json(res, 503, {
+      error: "Firewall configuration is invalid.",
+      code: "FIREWALL_CONFIGURATION_ERROR",
     });
   }
 
-  // Require an authenticated user.
-  const authorization = req.headers.authorization || "";
-  const tokenMatch = authorization.match(
-    /^Bearer\s+(\S+)$/i
-  );
+  // Limit payload size before parsing.
+  const declaredLength = Number(req.headers["content-length"] || 0);
 
-  if (!tokenMatch) {
-    return res.status(401).json({
-      error: "Please sign in to test prompts.",
+  if (declaredLength > MAX_BODY_BYTES) {
+    return json(res, 413, { error: "Request is too large." });
+  }
+
+  let body = req.body;
+
+  if (typeof body === "string") {
+    if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
+      return json(res, 413, { error: "Request is too large." });
+    }
+
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return json(res, 400, { error: "Invalid JSON." });
+    }
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return json(res, 400, { error: "Invalid request body." });
+  }
+
+  const prompt = getText(body).trim();
+
+  if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
+    return json(res, 400, {
+      error: "Provide a prompt of 1–8000 characters.",
     });
   }
+
+  // Ignore client-supplied decisions, trust labels, and destination URLs.
+  const requestId = crypto.randomUUID();
+
+  let inspection;
 
   try {
-    const authenticated = await authenticateUser(
-      tokenMatch[1]
+    const labResponse = await fetchWithTimeout(
+      new URL("/api/inspect", labUrl).toString(),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          text: prompt,
+          requestId,
+          sourceApp: "Nova AI",
+        }),
+      },
+      REQUEST_TIMEOUT_MS
     );
 
-    if (!authenticated) {
-      return res.status(401).json({
-        error: "Your session is invalid or expired.",
+    if (!labResponse.ok) {
+      console.error("Firewall inspection failed:", {
+        status: labResponse.status,
+        requestId,
+      });
+
+      return json(res, 503, {
+        error: "AI Firewall Lab is unavailable. No result was fabricated.",
+        code: "FIREWALL_UNAVAILABLE",
+        requestId,
       });
     }
+
+    const contentType = labResponse.headers.get("content-type") || "";
+
+    if (!contentType.includes("application/json")) {
+      throw new Error("Unexpected firewall response type");
+    }
+
+    inspection = await labResponse.json();
   } catch (error) {
-    return res
-      .status(error.name === "AbortError" ? 504 : 503)
-      .json({
-        error: "Unable to verify your session.",
-      });
+    console.error("Firewall inspection error:", {
+      requestId,
+      name: error?.name || "Error",
+    });
+
+    return json(res, 503, {
+      error: "AI Firewall Lab is unavailable. No result was fabricated.",
+      code: "FIREWALL_UNAVAILABLE",
+      requestId,
+    });
   }
 
-  // Validate the incoming request.
-  let messages;
+  const decision = normalizeDecision(inspection);
+
+  // Fail closed: an unknown or missing verdict never permits an AI call.
+  if (decision !== "ALLOW") {
+    return json(res, decision === "DENY" ? 403 : 503, {
+      error:
+        decision === "DENY"
+          ? "The AI Firewall Lab denied this request."
+          : "The firewall returned no recognized authorization verdict.",
+      code:
+        decision === "DENY"
+          ? "FIREWALL_DENIED"
+          : "INVALID_FIREWALL_VERDICT",
+      requestId,
+      firewall: {
+        decision: decision || "UNKNOWN",
+        riskScore:
+          Number.isFinite(inspection?.riskScore)
+            ? inspection.riskScore
+            : undefined,
+      },
+    });
+  }
+
+  // Configure a currently supported Gemini model in Vercel.
+  // Do not hard-code a model ID that may be unavailable to your account.
+  const model = (process.env.GEMINI_MODEL || "").trim();
+
+  if (!model || !/^[a-zA-Z0-9._-]+$/.test(model)) {
+    return json(res, 503, {
+      error: "Gemini model configuration is missing or invalid.",
+      code: "MODEL_CONFIGURATION_ERROR",
+      requestId,
+    });
+  }
+
+  let geminiResponse;
 
   try {
-    messages = validateMessages(req.body?.messages);
-  } catch (error) {
-    return res.status(400).json({
-      error: error.message,
-    });
-  }
-
-  // Test only the latest user-submitted prompt.
-  const latestUserMessage = [...messages]
-    .reverse()
-    .find((message) => message.role === "user");
-
-  if (!latestUserMessage) {
-    return res.status(400).json({
-      error: "Enter a prompt to test.",
-    });
-  }
-
-  const prompt = latestUserMessage.content.trim();
-
-  if (prompt.length > FIREWALL_MAX_CHARS) {
-    return res.status(400).json({
-      error: "Prompts must be 12,000 characters or fewer.",
-    });
-  }
-
-  // Send the prompt to the real firewall endpoint.
-  let security;
-
-  try {
-    security = await inspectPrompt(prompt);
-  } catch (error) {
-    const timedOut = error.name === "AbortError";
-
-    return res
-      .status(timedOut ? 504 : 503)
-      .json({
-        status: "unavailable",
-        error: timedOut
-          ? "Firewall inspection timed out. Please retry."
-          : "AI Firewall Lab is unavailable. No result was fabricated.",
-        security: {
-          decision: "UNAVAILABLE",
-          source: "AI Firewall Lab",
-          modelCalled: false,
-          actionExecuted: false,
+    geminiResponse = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": geminiKey,
         },
-      });
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: 1200,
+            temperature: 0.7,
+          },
+        }),
+      },
+      30000
+    );
+  } catch (error) {
+    console.error("Gemini request failed:", {
+      requestId,
+      name: error?.name || "Error",
+    });
+
+    return json(res, 502, {
+      error: "The AI provider could not complete the request.",
+      code: "AI_PROVIDER_UNAVAILABLE",
+      requestId,
+    });
   }
 
-  // Build dashboard data using the lab's actual response.
-  const reasons = security.reasons;
+  if (!geminiResponse.ok) {
+    // Avoid logging API keys or raw provider response bodies.
+    console.error("Gemini returned an error:", {
+      requestId,
+      status: geminiResponse.status,
+      model,
+    });
 
-  const details = reasons.length
-    ? reasons.join("; ")
-    : "No rule matches were reported by the lab.";
+    return json(
+      res,
+      geminiResponse.status === 429 || geminiResponse.status >= 500
+        ? 503
+        : 502,
+      {
+        error: "The AI provider could not complete the request.",
+        code: "AI_PROVIDER_ERROR",
+        requestId,
+      }
+    );
+  }
 
-  const dashboardResult = {
-    decision: security.decision,
-    score: security.score,
-    reasons,
-    source: security.source,
-    modelCalled: false,
-    actionExecuted: false,
-  };
+  let generated;
 
-  // Return the result. No model or executor is invoked.
-  return res.status(200).json({
-    status: "tested",
-    security: dashboardResult,
-    reply: [
-      `Firewall verdict: ${security.decision}`,
-      `Risk score: ${security.score}/100`,
-      `Inspected by: ${security.source}`,
-      "AI model called: No",
-      "Real action executed: No",
-      "",
-      `Matched rules / details: ${details}`,
-    ].join("\n"),
+  try {
+    generated = await geminiResponse.json();
+  } catch {
+    return json(res, 502, {
+      error: "The AI provider returned an invalid response.",
+      code: "INVALID_AI_RESPONSE",
+      requestId,
+    });
+  }
+
+  const reply = generated?.candidates?.[0]?.content?.parts
+    ?.map((part) => (typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+
+  if (!reply) {
+    return json(res, 502, {
+      error: "The AI provider returned no text response.",
+      code: "EMPTY_AI_RESPONSE",
+      requestId,
+    });
+  }
+
+  return json(res, 200, {
+    reply,
+    requestId,
+    firewall: {
+      decision: "ALLOW",
+      inspected: true,
+    },
   });
 }
