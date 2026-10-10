@@ -1,9 +1,11 @@
+"use strict";
+
 const CONFIG = {
   url: process.env.supabase_url,
   anonKey: process.env.supabase_anon_key,
   serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   geminiKey: process.env.GEMINI_API_KEY,
-  model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+  model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
 };
 
 const MAX_MESSAGES = 30;
@@ -19,7 +21,6 @@ function getMissingConfig() {
   const required = {
     supabase_url: CONFIG.url,
     supabase_anon_key: CONFIG.anonKey,
-    SUPABASE_SERVICE_ROLE_KEY: CONFIG.serviceKey,
     GEMINI_API_KEY: CONFIG.geminiKey,
   };
 
@@ -56,6 +57,10 @@ function validateMessages(messages) {
       return "Each message must contain a valid role and string content.";
     }
 
+    if (!message.content.trim()) {
+      return "Message content cannot be empty.";
+    }
+
     if (message.content.length > MAX_MESSAGE_LENGTH) {
       return "A message exceeds the maximum allowed length.";
     }
@@ -75,7 +80,6 @@ function toGeminiContents(messages) {
 
   for (const message of messages) {
     const text = message.content.trim();
-
     if (!text) continue;
 
     const role = message.role === "assistant" ? "model" : "user";
@@ -91,7 +95,7 @@ function toGeminiContents(messages) {
     }
   }
 
-  // Gemini conversation history must begin with a user message.
+  // Gemini history must begin with a user message.
   while (contents.length && contents[0].role !== "user") {
     contents.shift();
   }
@@ -189,7 +193,6 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 503, {
       error: "Server configuration incomplete.",
       missing,
-      hint: "Check that these environment variables exist in the Vercel Production environment.",
     });
   }
 
@@ -288,6 +291,13 @@ module.exports = async function handler(req, res) {
     if (error.status === 401 || error.status === 403) {
       return sendJson(res, 502, {
         error: "The AI provider rejected its server API credentials.",
+      });
+    }
+
+    if (error.status === 404) {
+      return sendJson(res, 502, {
+        error:
+          "The configured Gemini model is unavailable. Check GEMINI_MODEL in Vercel.",
       });
     }
 
